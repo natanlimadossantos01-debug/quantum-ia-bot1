@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS)
+⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS) COM ANÁLISE
 🕯️ 12 Quadrantes + 5-2-0 + Chinesa 3.0
 🛡️ Filtros: Pavio, Tendência, Vela Forte
-📨 Envia sinais para Telegram (sem executar trades)
+📨 Envia sinal + análise do Trader Professor (sem executar trades)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os, random
 from datetime import datetime, timedelta, timezone
@@ -14,7 +14,7 @@ signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
 def banner():
-    print("⚛️ QUANTUM BOT PRO - Modo Sinal | 14 Estratégias")
+    print("⚛️ QUANTUM BOT PRO - Modo Sinal + Análise | 14 Estratégias")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -270,6 +270,62 @@ class FiltroVelaForte:
         ultimo_range = velas[-1]['high'] - velas[-1]['low']
         return ultimo_range <= atr * 2.0
 
+# ------------------------- TRADER PROFESSOR -------------------------
+class TraderProfessor:
+    def __init__(self):
+        self.filtro_tendencia = FiltroTendencia()
+        self.tendencias = {nome:"NEUTRA" for nome in ATIVOS_OTC}
+
+    def atualizar_tendencias(self, velas_dict):
+        for nome, velas in velas_dict.items():
+            if len(velas) >= 20:
+                tendencia, _ = self.filtro_tendencia.analisar_tendencia(velas)
+                self.tendencias[nome] = tendencia
+
+    def ler_grafico(self, velas, direcao):
+        if len(velas) < 5: return "Poucas velas"
+        obs = []
+        v, v1 = velas[-1], velas[-2]
+        corpo = abs(v['close'] - v['open'])
+        range_total = v['high'] - v['low']
+        pavio_sup = v['high'] - max(v['close'], v['open'])
+        pavio_inf = min(v['close'], v['open']) - v['low']
+        if direcao == 'CALL':
+            if pavio_inf > corpo*2 and pavio_sup < corpo*0.3: obs.append("🔨 Martelo")
+            elif corpo > abs(v1['close']-v1['open'])*1.5 and v['close'] > v1['open']: obs.append("📈 Engolfo alta")
+            if pavio_sup > corpo*0.6: obs.append("⚠️ Pavio superior")
+        else:
+            if pavio_sup > corpo*2 and pavio_inf < corpo*0.3: obs.append("💫 Estrela cadente")
+            elif corpo > abs(v1['close']-v1['open'])*1.5 and v['close'] < v1['open']: obs.append("📉 Engolfo baixa")
+            if pavio_inf > corpo*0.6: obs.append("⚠️ Pavio inferior")
+        if corpo > range_total*0.6: obs.append("💪 Vela forte")
+        precos = [x['close'] for x in velas]
+        altas = sum(1 for i in range(-5,0) if i>=-len(precos)+1 and precos[i]>precos[i-1])
+        if altas >= 4: obs.append("📈 Tendência alta")
+        elif altas <= 1: obs.append("📉 Tendência baixa")
+        else: obs.append("↔️ Sem direção")
+        if not obs: obs.append("✅ Setup neutro")
+        return " | ".join(obs)
+
+    def explicar_entrada(self, sinal, velas):
+        ativo = sinal['ativo']; direcao = sinal['direcao']; conf = sinal.get('confianca',0)
+        est = sinal.get('estrategia','N/A')
+        leitura = self.ler_grafico(velas, direcao)
+        tendencia = self.tendencias.get(ativo, 'NEUTRA')
+        alinhamento = "✅ ALINHADO" if (
+            (direcao == "CALL" and "ALTA" in tendencia) or 
+            (direcao == "PUT" and "BAIXA" in tendencia) or
+            "NEUTRA" in tendencia
+        ) else "⚠️ CONTRA TENDÊNCIA"
+        return f"""👨‍🏫 *ANÁLISE DO TRADER*
+
+📊 *Mercado:* {tendencia}
+📐 *Alinhamento:* {alinhamento}
+👁️ *Gráfico:* {leitura}
+🧠 *Estratégia:* {est}
+🎯 *Decisão:* {direcao} com {conf:.0f}% de confiança
+⚔️ *A vitória começa na execução perfeita, não no resultado.*"""
+
 # ------------------------- BOT -------------------------
 class BotProSinais:
     def __init__(self):
@@ -284,16 +340,15 @@ class BotProSinais:
             ('🔬 5-2-0', Estrategia520()), ('🔬 Chinesa 3.0', Chinesa30())
         ]
         self.filtro_tendencia = FiltroTendencia()
+        self.trader = TraderProfessor()
         self.ult_sinal = 0
         self.sinais_enviados = 0
-        self.velas_dict = {}  # será preenchido com dados da IQ Option
 
     async def atualizar_velas(self):
         from iqoptionapi.stable_api import IQ_Option
         email = os.environ.get('IQ_EMAIL')
         senha = os.environ.get('IQ_SENHA')
         if not email or not senha:
-            print("❌ Configure IQ_EMAIL e IQ_SENHA")
             return
         try:
             api = IQ_Option(email, senha)
@@ -326,17 +381,18 @@ class BotProSinais:
                 try:
                     d, c = est.analisar(velas)
                     if d and c >= 65 and FiltroPavio.ok(velas, d) and FiltroVelaForte.ok(velas) and self.filtro_tendencia.sinal_alinhado(d, tendencia, forca):
-                        return {'ativo': nome_par, 'direcao': d, 'confianca': c, 'estrategia': nome_est, 'tendencia': tendencia}
+                        return {'ativo': nome_par, 'direcao': d, 'confianca': c, 'estrategia': nome_est, 'tendencia': tendencia, 'velas': velas}
                 except: pass
         return None
 
     async def executar(self):
         banner()
         print("⚛️ Bot Pro Sinais iniciando...")
-        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min")
+        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min | Análise incluída")
         while True:
             try:
                 await self.atualizar_velas()
+                self.trader.atualizar_tendencias(self.velas)
                 sinal = self.buscar_sinal()
                 if sinal and time.time() - self.ult_sinal > 300:
                     self.sinais_enviados += 1
@@ -344,7 +400,7 @@ class BotProSinais:
                     agora = datetime.now(FUSO_BR)
                     he = (agora.replace(second=0, microsecond=0) + timedelta(minutes=1)).strftime('%H:%M')
                     emoji = '🟢' if sinal['direcao']=='CALL' else '🔴'
-                    msg = f"""⚛️ SINAL QUANTUM PRO ⚛️
+                    msg_sinal = f"""⚛️ SINAL QUANTUM PRO ⚛️
 
 ⏰ Horário: {he}
 💰 Ativo: {sinal['ativo']}-OTC
@@ -356,7 +412,10 @@ class BotProSinais:
 
 ⚠️ Entrar somente no horário marcado.
 🔄 1 recuperação (Gale 1)!"""
-                    self.tg.send(msg)
+                    self.tg.send(msg_sinal)
+                    # Envia análise logo em seguida
+                    analise = self.trader.explicar_entrada(sinal, sinal['velas'])
+                    self.tg.send(analise)
                     print(f"⚛️ #{self.sinais_enviados} {sinal['ativo']}-OTC {sinal['direcao']} | {sinal['confianca']:.0f}% | {sinal['estrategia']}")
                 await asyncio.sleep(30)
             except KeyboardInterrupt:
