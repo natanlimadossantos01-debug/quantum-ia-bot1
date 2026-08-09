@@ -1,16 +1,37 @@
-app = "quantum-ia-bot"   # Troque para um nome único (ex: quantum-bot-m5)
-kill_signal = "SIGINT"
-kill_timeout = 5
+# fly.toml app configuration file generated for quantum-ia-bot1 on 2026-08-09T06:47:46Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'quantum-ia-bot1'
+primary_region = 'gru'
+kill_signal = 'SIGINT'
+kill_timeout = '5s'
 
 [build]
-  builder = "paketobuildpacks/builder:base"
+  builder = 'paketobuildpacks/builder:base'
 
 [env]
-  TELEGRAM_TOKEN = ""
-  TELEGRAM_CHAT_ID = ""
-  IQ_EMAIL = ""
-  IQ_SENHA = ""
+  IQ_EMAIL = ''
+  IQ_SENHA = ''
+  TELEGRAM_CHAT_ID = ''
+  TELEGRAM_TOKEN = ''
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 [[services]]
-  protocol = "tcp"
+  protocol = 'tcp'
   internal_port = 8080
+  ports = []
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
