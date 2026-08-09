@@ -1,9 +1,6 @@
-app = "m5IA"
+app = "quantum-ia-bot1"
 kill_signal = "SIGINT"
 kill_timeout = 5
-
-[build]
-  builder = "paketobuildpacks/builder:base"
 
 [env]
   TELEGRAM_TOKEN = ""
