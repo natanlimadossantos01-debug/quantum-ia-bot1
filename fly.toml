@@ -1,4 +1,4 @@
-app = "quantum-ia-bot"   # Troque para um nome único (ex: quantum-bot-m5)
+app = "quantum-ia-bot1"
 kill_signal = "SIGINT"
 kill_timeout = 5
 
@@ -14,3 +14,6 @@ kill_timeout = 5
 [[services]]
   protocol = "tcp"
   internal_port = 8080
+  [[services.ports]]
+    handlers = ["tcp"]
+    port = 8080
