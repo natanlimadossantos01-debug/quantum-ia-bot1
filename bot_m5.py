@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS) COM ANÁLISE
+⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS) + CORREÇÃO WIN/LOSS
 🕯️ 12 Quadrantes + 5-2-0 + Chinesa 3.0
 🛡️ Filtros: Pavio, Tendência, Vela Forte
-📨 Envia sinal + análise do Trader Professor (sem executar trades)
+📨 Envia sinal + análise + resultado (sem executar trades)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os, random
 from datetime import datetime, timedelta, timezone
@@ -14,7 +14,7 @@ signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
 def banner():
-    print("⚛️ QUANTUM BOT PRO - Modo Sinal + Análise | 14 Estratégias")
+    print("⚛️ QUANTUM BOT PRO - Sinais + Correção | 14 Estratégias")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -385,10 +385,49 @@ class BotProSinais:
                 except: pass
         return None
 
+    async def monitorar_resultado(self, sinal, horario_entrada):
+        """Aguarda o fechamento do candle e envia se foi WIN ou LOSS"""
+        ativo = sinal['ativo']
+        direcao = sinal['direcao']
+        confianca = sinal['confianca']
+        estrategia = sinal['estrategia']
+        # Calcular o timestamp do candle de entrada
+        agora = datetime.now(FUSO_BR)
+        candle = horario_entrada
+        # Esperar até o final desse candle (60 segundos)
+        espera = (candle + timedelta(minutes=1) - agora).total_seconds()
+        if espera > 0:
+            await asyncio.sleep(espera)
+        # Aguardar mais alguns segundos para garantir que a vela foi atualizada
+        await asyncio.sleep(5)
+        # Atualizar velas para ter o candle completo
+        await self.atualizar_velas()
+        velas = self.velas[ativo]
+        # Encontrar o candle correspondente
+        resultado = None
+        for v in velas:
+            if v['time'].replace(second=0) == candle:
+                if direcao == 'CALL':
+                    ganhou = v['high'] > v['open']
+                else:
+                    ganhou = v['low'] < v['open']
+                resultado = ganhou
+                break
+        if resultado is None:
+            # Se não encontrou, assume loss
+            resultado = False
+        
+        msg = ""
+        if resultado:
+            msg = f"✅ WIN\n📊 {ativo}-OTC | {direcao} {'🟢' if direcao=='CALL' else '🔴'}\n🧠 {estrategia} | Confiança: {confianca:.0f}%"
+        else:
+            msg = f"❌ LOSS\n📊 {ativo}-OTC | {direcao} {'🟢' if direcao=='CALL' else '🔴'}\n🧠 {estrategia} | Confiança: {confianca:.0f}%"
+        self.tg.send(msg)
+
     async def executar(self):
         banner()
         print("⚛️ Bot Pro Sinais iniciando...")
-        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min | Análise incluída")
+        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min | Análise + Correção")
         while True:
             try:
                 await self.atualizar_velas()
@@ -398,7 +437,9 @@ class BotProSinais:
                     self.sinais_enviados += 1
                     self.ult_sinal = time.time()
                     agora = datetime.now(FUSO_BR)
-                    he = (agora.replace(second=0, microsecond=0) + timedelta(minutes=1)).strftime('%H:%M')
+                    # Próximo minuto cheio (horário de entrada)
+                    proximo_candle = agora.replace(second=0, microsecond=0) + timedelta(minutes=1)
+                    he = proximo_candle.strftime('%H:%M')
                     emoji = '🟢' if sinal['direcao']=='CALL' else '🔴'
                     msg_sinal = f"""⚛️ SINAL QUANTUM PRO ⚛️
 
@@ -413,10 +454,12 @@ class BotProSinais:
 ⚠️ Entrar somente no horário marcado.
 🔄 1 recuperação (Gale 1)!"""
                     self.tg.send(msg_sinal)
-                    # Envia análise logo em seguida
+                    # Análise do Trader Professor
                     analise = self.trader.explicar_entrada(sinal, sinal['velas'])
                     self.tg.send(analise)
                     print(f"⚛️ #{self.sinais_enviados} {sinal['ativo']}-OTC {sinal['direcao']} | {sinal['confianca']:.0f}% | {sinal['estrategia']}")
+                    # Disparar tarefa para monitorar o resultado
+                    asyncio.create_task(self.monitorar_resultado(sinal, proximo_candle))
                 await asyncio.sleep(30)
             except KeyboardInterrupt:
                 print("🛑 Encerrado.")
