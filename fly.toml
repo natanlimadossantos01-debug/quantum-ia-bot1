@@ -1,0 +1,16 @@
+app = "quantum-ia-bot"   # Troque para um nome único (ex: quantum-bot-m5)
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  builder = "paketobuildpacks/builder:base"
+
+[env]
+  TELEGRAM_TOKEN = ""
+  TELEGRAM_CHAT_ID = ""
+  IQ_EMAIL = ""
+  IQ_SENHA = ""
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
