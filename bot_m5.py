@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS) + PLACAR + CORREÇÃO WIN/LOSS
+⚛️ QUANTUM BOT PRO - SINAIS M1 (14 ESTRATÉGIAS) + PLACAR REALISTA
 🕯️ 12 Quadrantes + 5-2-0 + Chinesa 3.0
 🛡️ Filtros: Pavio, Tendência, Vela Forte
-📨 Envia sinal + análise + resultado com placar (sem executar trades)
-✅ Conexão persistente com IQ Option (corrigido erro JSON)
+📨 Sinal + Análise + Resultado com placar correto (fechamento)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os, random
 from datetime import datetime, timedelta, timezone
@@ -15,7 +14,7 @@ signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
 def banner():
-    print("⚛️ QUANTUM BOT PRO - Sinais + Placar | 14 Estratégias | Conexão estável")
+    print("⚛️ QUANTUM BOT PRO - Sinais + Placar | 14 Estratégias | Correção por fechamento")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -327,7 +326,7 @@ class TraderProfessor:
 🎯 *Decisão:* {direcao} com {conf:.0f}% de confiança
 ⚔️ *A vitória começa na execução perfeita, não no resultado.*"""
 
-# ------------------------- BOT COM PLACAR -------------------------
+# ------------------------- BOT COM PLACAR CORRIGIDO -------------------------
 class BotProSinais:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
@@ -344,12 +343,10 @@ class BotProSinais:
         self.trader = TraderProfessor()
         self.ult_sinal = 0
         self.sinais_enviados = 0
-        # Placar
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
-        self.iq_api = None  # sessão persistente
+        self.iq_api = None
 
     def conectar_iq(self):
-        """Conecta (ou reconecta) à IQ Option e retorna a API."""
         from iqoptionapi.stable_api import IQ_Option
         email = os.environ.get('IQ_EMAIL')
         senha = os.environ.get('IQ_SENHA')
@@ -377,9 +374,7 @@ class BotProSinais:
         email = os.environ.get('IQ_EMAIL')
         senha = os.environ.get('IQ_SENHA')
         if not email or not senha:
-            print("❌ Configure IQ_EMAIL e IQ_SENHA")
             return
-        # Garante que temos uma API conectada
         if self.iq_api is None or not self.iq_api.check_connect():
             if not self.conectar_iq():
                 print("❌ Não foi possível conectar à IQ Option.")
@@ -407,7 +402,6 @@ class BotProSinais:
                 except json.decoder.JSONDecodeError as e:
                     print(f"⚠️ Erro JSON ao obter {nome} (tentativa {retry+1}/3): {e}")
                     time.sleep(3)
-                    # Reconecta para renovar sessão
                     self.conectar_iq()
                 except Exception as e:
                     print(f"❌ Erro ao obter velas de {nome}: {e}")
@@ -436,7 +430,7 @@ class BotProSinais:
         return round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1)
 
     async def monitorar_resultado(self, sinal, horario_entrada):
-        """Simula entrada e gale, atualiza placar e envia correção"""
+        """Simula entrada e gale, atualiza placar e envia correção usando FECHAMENTO"""
         ativo = sinal['ativo']
         direcao = sinal['direcao']
         confianca = sinal['confianca']
@@ -446,25 +440,23 @@ class BotProSinais:
         espera = (horario_entrada + timedelta(minutes=1) - agora).total_seconds()
         if espera > 0:
             await asyncio.sleep(espera)
-        await asyncio.sleep(5)  # pequena margem
+        await asyncio.sleep(5)
         await self.atualizar_velas()
         velas = self.velas[ativo]
-        # Procura o candle exato
         ganhou = False
         for v in velas:
             if v['time'].replace(second=0) == horario_entrada:
                 if direcao == 'CALL':
-                    ganhou = v['high'] > v['open']
+                    ganhou = v['close'] > v['open']
                 else:
-                    ganhou = v['low'] < v['open']
+                    ganhou = v['close'] < v['open']
                 break
         if ganhou:
             self.placar['w'] += 1
             resultado = "✅ WIN"
         else:
-            # Tenta Gale 1 (próximo candle)
+            # Gale 1
             proximo_candle = horario_entrada + timedelta(minutes=1)
-            # Aguarda o próximo candle fechar
             agora = datetime.now(FUSO_BR)
             espera = (proximo_candle + timedelta(minutes=1) - agora).total_seconds()
             if espera > 0:
@@ -476,9 +468,9 @@ class BotProSinais:
             for v in velas:
                 if v['time'].replace(second=0) == proximo_candle:
                     if direcao == 'CALL':
-                        ganhou_gale = v['high'] > v['open']
+                        ganhou_gale = v['close'] > v['open']
                     else:
-                        ganhou_gale = v['low'] < v['open']
+                        ganhou_gale = v['close'] < v['open']
                     break
             if ganhou_gale:
                 self.placar['g1'] += 1
@@ -486,7 +478,7 @@ class BotProSinais:
             else:
                 self.placar['l'] += 1
                 resultado = "❌ LOSS"
-        # Formata e envia correção com placar
+        # Envia correção com placar
         tx = self._calcular_assertividade()
         msg = f"""{resultado}
 📊 {ativo}-OTC | {direcao} {'🟢' if direcao=='CALL' else '🔴'}
@@ -496,8 +488,8 @@ class BotProSinais:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot Pro Sinais com Placar iniciando...")
-        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min | Placar + Correção")
+        print("⚛️ Bot Pro Sinais com Placar Realista iniciando...")
+        self.tg.send("🔥 *QUANTUM BOT PRO ATIVADO*\n📊 14 Estratégias | M1\n🛡️ Filtros: Pavio, Tendência, Vela Forte\n⏱️ Sinais a cada 5min | Placar por fechamento")
         while True:
             try:
                 await self.atualizar_velas()
