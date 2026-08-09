@@ -4,6 +4,7 @@
 🕯️ 12 Quadrantes + 5-2-0 + Chinesa 3.0
 🛡️ Filtros: Pavio, Tendência, Vela Forte
 📨 Envia sinal + análise + resultado com placar (sem executar trades)
+✅ Conexão persistente com IQ Option (corrigido erro JSON)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os, random
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
 def banner():
-    print("⚛️ QUANTUM BOT PRO - Sinais + Placar | 14 Estratégias")
+    print("⚛️ QUANTUM BOT PRO - Sinais + Placar | 14 Estratégias | Conexão estável")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -43,7 +44,7 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=5)
         except: pass
 
-# ------------------------- ESTRATÉGIAS (mantidas iguais) -------------------------
+# ------------------------- ESTRATÉGIAS -------------------------
 class MHI1:
     def analisar(self, v):
         try:
@@ -206,7 +207,7 @@ class Chinesa30:
             return None, 0
         except: return None, 0
 
-# ------------------------- FILTROS (mantidos) -------------------------
+# ------------------------- FILTROS -------------------------
 class FiltroTendencia:
     def __init__(self): self.forca_minima = 0.0002
     def analisar_tendencia(self, velas):
@@ -270,7 +271,7 @@ class FiltroVelaForte:
         ultimo_range = velas[-1]['high'] - velas[-1]['low']
         return ultimo_range <= atr * 2.0
 
-# ------------------------- TRADER PROFESSOR (mantido) -------------------------
+# ------------------------- TRADER PROFESSOR -------------------------
 class TraderProfessor:
     def __init__(self):
         self.filtro_tendencia = FiltroTendencia()
@@ -345,36 +346,76 @@ class BotProSinais:
         self.sinais_enviados = 0
         # Placar
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
-        self.historico_ops = []  # não usado no envio, mas mantido para registro
+        self.iq_api = None  # sessão persistente
 
-    async def atualizar_velas(self):
+    def conectar_iq(self):
+        """Conecta (ou reconecta) à IQ Option e retorna a API."""
         from iqoptionapi.stable_api import IQ_Option
         email = os.environ.get('IQ_EMAIL')
         senha = os.environ.get('IQ_SENHA')
         if not email or not senha:
-            return
+            return None
         try:
-            api = IQ_Option(email, senha)
-            api.connect()
-            for nome, ativo_id in ATIVOS_OTC.items():
-                for retry in range(3):
-                    try:
-                        c = api.get_candles(ativo_id, 60, 80, time.time())
-                        if c and len(c) > 0:
-                            self.velas[nome].clear()
-                            for x in c[-80:]:
-                                if isinstance(x, dict):
-                                    self.velas[nome].append({
-                                        'time': datetime.fromtimestamp(x.get('from',0), FUSO_BR),
-                                        'open': float(x['open']), 'high': float(x['max']),
-                                        'low': float(x['min']), 'close': float(x['close']),
-                                        'volume': int(x.get('volume',0))
-                                    })
-                            break
-                    except: time.sleep(2)
-            api.close()
+            if self.iq_api is not None:
+                try:
+                    self.iq_api.close()
+                except:
+                    pass
+            self.iq_api = IQ_Option(email, senha)
+            check, _ = self.iq_api.connect()
+            if check:
+                print("✅ Conectado à IQ Option com sucesso.")
+                return self.iq_api
+            else:
+                print("❌ Falha na conexão com IQ Option.")
+                return None
         except Exception as e:
-            print(f"❌ Erro ao obter velas: {e}")
+            print(f"❌ Erro de conexão: {e}")
+            return None
+
+    async def atualizar_velas(self):
+        email = os.environ.get('IQ_EMAIL')
+        senha = os.environ.get('IQ_SENHA')
+        if not email or not senha:
+            print("❌ Configure IQ_EMAIL e IQ_SENHA")
+            return
+        # Garante que temos uma API conectada
+        if self.iq_api is None or not self.iq_api.check_connect():
+            if not self.conectar_iq():
+                print("❌ Não foi possível conectar à IQ Option.")
+                return
+
+        for nome, ativo_id in ATIVOS_OTC.items():
+            sucesso = False
+            for retry in range(3):
+                try:
+                    c = self.iq_api.get_candles(ativo_id, 60, 80, time.time())
+                    if c and len(c) > 0:
+                        self.velas[nome].clear()
+                        for x in c[-80:]:
+                            if isinstance(x, dict):
+                                self.velas[nome].append({
+                                    'time': datetime.fromtimestamp(x.get('from',0), FUSO_BR),
+                                    'open': float(x['open']), 'high': float(x['max']),
+                                    'low': float(x['min']), 'close': float(x['close']),
+                                    'volume': int(x.get('volume',0))
+                                })
+                        sucesso = True
+                        break
+                    else:
+                        time.sleep(2)
+                except json.decoder.JSONDecodeError as e:
+                    print(f"⚠️ Erro JSON ao obter {nome} (tentativa {retry+1}/3): {e}")
+                    time.sleep(3)
+                    # Reconecta para renovar sessão
+                    self.conectar_iq()
+                except Exception as e:
+                    print(f"❌ Erro ao obter velas de {nome}: {e}")
+                    time.sleep(2)
+                    if "Expecting value" in str(e) or "Connection" in str(e):
+                        self.conectar_iq()
+            if not sucesso:
+                print(f"⚠️ Falha ao atualizar velas de {nome} após 3 tentativas.")
 
     def buscar_sinal(self):
         for nome_par, velas in self.velas.items():
