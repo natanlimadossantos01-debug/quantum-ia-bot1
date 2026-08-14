@@ -2,8 +2,9 @@
 """
 ⚛️ QUANTUM IA TRADER - POWER TREND (M5)
 📊 Estratégia: Power Trend Pullback
-📨 Sinal + correção no tempo exato
+📨 Sinal enviado 30 segundos antes da entrada
 🛡️ Apenas 3 pares OTC
+🔄 Com gale 1
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ FUSO_BR = timezone(timedelta(hours=-3))
 TIMEFRAME = "M5"
 INTERVALO_MINIMO = 300       # 5 min entre sinais
 USAR_GALE = True
+ANTECEDENCIA = 30            # segundos antes da entrada
 
 def banner():
     print(f"⚛️ QUANTUM IA TRADER ({TIMEFRAME}) - OTC")
@@ -207,7 +209,7 @@ class BotPowerTrend:
 
 👉🏼 HORARIO: {hora}
 
-🏳ATIVO: {ativo} {direcao}
+🏳ATIVO: {ativo}-OTC {direcao}
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -216,12 +218,12 @@ class BotPowerTrend:
         direcao = sinal['direcao']
         timeframe_seg = 300 if TIMEFRAME == "M5" else 900
 
-        # Aguarda até 10 segundos antes do fechamento da vela
+        # Aguarda até 5 segundos antes do fechamento da vela
         agora = datetime.now(FUSO_BR)
-        espera = (horario_entrada + timedelta(seconds=timeframe_seg - 10) - agora).total_seconds()
+        espera = (horario_entrada + timedelta(seconds=timeframe_seg - 5) - agora).total_seconds()
         if espera > 0:
             await asyncio.sleep(espera)
-        await asyncio.sleep(15)  # margem para fechar a vela
+        await asyncio.sleep(10)  # margem para fechar a vela
         await self.atualizar_velas()
         velas = self.velas[ativo]
 
@@ -238,10 +240,10 @@ class BotPowerTrend:
             if USAR_GALE:
                 proxima_vela = horario_entrada + timedelta(seconds=timeframe_seg)
                 agora = datetime.now(FUSO_BR)
-                espera = (proxima_vela + timedelta(seconds=timeframe_seg - 10) - agora).total_seconds()
+                espera = (proxima_vela + timedelta(seconds=timeframe_seg - 5) - agora).total_seconds()
                 if espera > 0:
                     await asyncio.sleep(espera)
-                await asyncio.sleep(15)
+                await asyncio.sleep(10)
                 await self.atualizar_velas()
                 velas = self.velas[ativo]
                 ganhou_gale = False
@@ -270,24 +272,27 @@ class BotPowerTrend:
     async def executar(self):
         banner()
         print(f"⚛️ Bot Power Trend ({TIMEFRAME}) iniciando...")
-        self.tg.send(f"🔥 *QUANTUM IA TRADER ({TIMEFRAME}) ATIVADO*\n📊 Estratégia: Power Trend Pullback\n🔄 Gale 1\n📌 Apenas 3 pares OTC")
+        self.tg.send(f"🔥 *QUANTUM IA TRADER ({TIMEFRAME}) ATIVADO*\n📊 Estratégia: Power Trend Pullback\n🔄 Gale 1\n📌 Apenas 3 pares OTC\n⏰ Sinal {ANTECEDENCIA}s antes")
         while True:
             try:
                 await self.atualizar_velas()
                 sinal = self.buscar_sinal()
                 if sinal and time.time() - self.ult_sinal > INTERVALO_MINIMO:
                     horario_entrada = self.calcular_horario_entrada()
-                    # Aguarda até o horário exato
+                    horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
+
                     agora = datetime.now(FUSO_BR)
-                    espera = (horario_entrada - agora).total_seconds()
+                    espera = (horario_envio - agora).total_seconds()
                     if espera > 0:
+                        print(f"⏳ Aguardando {espera:.0f}s para enviar sinal...")
                         await asyncio.sleep(espera)
+
                     self.ult_sinal = time.time()
                     msg = self.formatar_sinal(sinal, horario_entrada)
                     self.tg.send(msg)
                     print(f"⚛️ {sinal['ativo']}-OTC {sinal['direcao']} | Confiança: {sinal['confianca']:.0f}%")
                     asyncio.create_task(self.monitorar_resultado(sinal, horario_entrada))
-                await asyncio.sleep(30)
+                await asyncio.sleep(1)
             except KeyboardInterrupt:
                 print("🛑 Encerrado.")
                 break
