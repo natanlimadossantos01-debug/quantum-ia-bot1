@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM IA TRADER - POWER TREND (M5)
-📊 Estratégia: Power Trend Pullback
+⚛️ QUANTUM IA TRADER - OTC TREND ALIGNMENT (M5)
+📊 Estratégia: Maioria/Minoria + Tendência SMA20 + Filtro de Pavio
 📨 Sinal enviado 30 segundos antes da entrada
 🛡️ Apenas 3 pares OTC
 🔄 Com gale 1
@@ -21,7 +21,7 @@ USAR_GALE = True
 ANTECEDENCIA = 30            # segundos antes da entrada
 
 def banner():
-    print(f"⚛️ QUANTUM IA TRADER ({TIMEFRAME}) - OTC")
+    print(f"⚛️ QUANTUM IA TRADER ({TIMEFRAME}) - OTC Trend Alignment")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -51,48 +51,51 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-class PowerTrendPullback:
+class OTCTrendAlignment:
     def __init__(self, timeframe='M5'):
         self.timeframe = timeframe
 
-    def _ema(self, valores, periodo):
+    def _sma(self, valores, periodo):
         if len(valores) < periodo:
             return sum(valores) / len(valores) if valores else 0
-        k = 2 / (periodo + 1)
-        ema = valores[0]
-        for p in valores[1:]:
-            ema = p * k + ema * (1 - k)
-        return ema
+        return sum(valores[-periodo:]) / periodo
 
     def analisar(self, velas):
         if len(velas) < 25:
             return None
 
         precos = [v['close'] for v in velas]
-        ema21 = self._ema(precos, 21)
+        sma20 = self._sma(precos, 20)
         atual = precos[-1]
+
+        # Conta velas de alta/baixa nas últimas 5 velas
+        ultimas_5 = list(velas)[-5:]
+        calls = sum(1 for v in ultimas_5 if v['close'] > v['open'])
+        puts = 5 - calls
+
+        # Última vela
         vela = velas[-1]
         corpo = abs(vela['close'] - vela['open'])
         if corpo == 0:
             return None
 
+        pavio_sup = vela['high'] - max(vela['close'], vela['open'])
+        pavio_inf = min(vela['close'], vela['open']) - vela['low']
+
+        # Horário
         hora = datetime.now(FUSO_BR).hour
         if hora < 8 or hora > 17:
             return None
 
-        distancia = abs(atual - ema21) / ema21 if ema21 > 0 else 0
+        # CALL: minoria de alta (2 altas, 3 baixas) + tendência de alta + sem pavio sup grande
+        if calls == 2 and puts == 3 and atual > sma20:
+            if pavio_sup <= corpo * 0.5:
+                return ('CALL', 74)
 
-        # CALL
-        if atual > ema21 and vela['close'] < vela['open'] and distancia < 0.0008:
-            pavio_inf = min(vela['close'], vela['open']) - vela['low']
-            if pavio_inf >= corpo * 1.5:
-                return ('CALL', 76)
-
-        # PUT
-        if atual < ema21 and vela['close'] > vela['open'] and distancia < 0.0008:
-            pavio_sup = vela['high'] - max(vela['close'], vela['open'])
-            if pavio_sup >= corpo * 1.5:
-                return ('PUT', 76)
+        # PUT: minoria de baixa (2 baixas, 3 altas) + tendência de baixa + sem pavio inf grande
+        if puts == 2 and calls == 3 and atual < sma20:
+            if pavio_inf <= corpo * 0.5:
+                return ('PUT', 74)
 
         return None
 
@@ -100,7 +103,7 @@ class BotPowerTrend:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.estrategia = PowerTrendPullback(TIMEFRAME)
+        self.estrategia = OTCTrendAlignment(TIMEFRAME)
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -218,12 +221,11 @@ class BotPowerTrend:
         direcao = sinal['direcao']
         timeframe_seg = 300 if TIMEFRAME == "M5" else 900
 
-        # Aguarda até 5 segundos antes do fechamento da vela
         agora = datetime.now(FUSO_BR)
         espera = (horario_entrada + timedelta(seconds=timeframe_seg - 5) - agora).total_seconds()
         if espera > 0:
             await asyncio.sleep(espera)
-        await asyncio.sleep(10)  # margem para fechar a vela
+        await asyncio.sleep(10)
         await self.atualizar_velas()
         velas = self.velas[ativo]
 
@@ -271,8 +273,8 @@ class BotPowerTrend:
 
     async def executar(self):
         banner()
-        print(f"⚛️ Bot Power Trend ({TIMEFRAME}) iniciando...")
-        self.tg.send(f"🔥 *QUANTUM IA TRADER ({TIMEFRAME}) ATIVADO*\n📊 Estratégia: Power Trend Pullback\n🔄 Gale 1\n📌 Apenas 3 pares OTC\n⏰ Sinal {ANTECEDENCIA}s antes")
+        print(f"⚛️ Bot OTC Trend Alignment ({TIMEFRAME}) iniciando...")
+        self.tg.send(f"🔥 *QUANTUM IA TRADER ({TIMEFRAME}) ATIVADO*\n📊 Estratégia: OTC Trend Alignment\n🔄 Gale 1\n📌 Apenas 3 pares OTC\n⏰ Sinal {ANTECEDENCIA}s antes")
         while True:
             try:
                 await self.atualizar_velas()
