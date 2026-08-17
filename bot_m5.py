@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-⚛️ QUANTUM IA M1 - ESTRATÉGIA SEM GALE (EMA20/EMA50 + RSI)
-📊 Pontuação mínima: 8 pontos
-🛡️ Sem martingale (entrada única)
-🔄 Placar diário automático
-"""
 import asyncio, time, requests, numpy as np, pandas as pd, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
 from collections import deque
@@ -16,7 +10,7 @@ FUSO_BR = timezone(timedelta(hours=-3))
 # Configurações
 INTERVALO_MINIMO = 600       # 10 min entre sinais
 ANTECEDENCIA = 30            # segundos antes da entrada
-USAR_GALE = False            # Sem gale (entrada única)
+USAR_GALE = False            # Sem gale
 
 def banner():
     print("⚛️ QUANTUM IA M1 - Estratégia Sem Gale | EMA+RSI")
@@ -53,6 +47,8 @@ class EstrategiaSemGale:
         self.ema_rapida = 20
         self.ema_lenta = 50
         self.rsi_periodo = 14
+        self.rsi_min = 50
+        self.rsi_max = 70
         self.pontuacao_minima = 8
 
     def calcular_indicadores(self, candles):
@@ -206,7 +202,7 @@ class BotSemGale:
 
     def buscar_sinal(self):
         for par, velas in self.velas.items():
-            if len(velas) < 70:  # precisa de pelo menos 50+14 velas
+            if len(velas) < 70:
                 continue
             resultado = self.estrategia.analisar(list(velas))
             if resultado:
