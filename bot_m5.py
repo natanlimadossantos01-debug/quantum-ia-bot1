@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM IA M1 - CONSENSO FORTE E FILTROS AVANÇADOS
-🕯️ Estratégias: MHI 1, MHI 2, VITUXO 2.0, Milhão Minoria, C3
-🎯 Consenso de 3+ estratégias + tendência SMA20 + filtro de pavio
-🛡️ Horário: 8h às 12h
+⚛️ QUANTUM IA M1 - ESTRATÉGIA SEM GALE (EMA20/EMA50 + RSI)
+📊 Pontuação mínima: 8 pontos
+🛡️ Sem martingale (entrada única)
 🔄 Placar diário automático
 """
-import asyncio, time, requests, numpy as np, signal, sys, json, os
+import asyncio, time, requests, numpy as np, pandas as pd, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
-from collections import deque, defaultdict
+from collections import deque
 from pathlib import Path
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
 # Configurações
-INTERVALO_MINIMO = 300       # 5 min entre sinais
-USAR_GALE = True
+INTERVALO_MINIMO = 600       # 10 min entre sinais
 ANTECEDENCIA = 30            # segundos antes da entrada
-CONFIANCA_MINIMA = 70        # confiança mínima das estratégias
+USAR_GALE = False            # Sem gale (entrada única)
 
 def banner():
-    print("⚛️ QUANTUM IA M1 - Consenso Forte | Placar Diário")
+    print("⚛️ QUANTUM IA M1 - Estratégia Sem Gale | EMA+RSI")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -50,74 +48,99 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-# Estratégias
-class MHI1:
-    offset = 0
-    def analisar(self, velas):
-        if len(velas) < 10: return None
-        q = list(velas)[-6:-3]
-        calls = sum(1 for v in q if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls == 1: return ('CALL', 70)
-        elif puts == 1: return ('PUT', 70)
+class EstrategiaSemGale:
+    def __init__(self):
+        self.ema_rapida = 20
+        self.ema_lenta = 50
+        self.rsi_periodo = 14
+        self.pontuacao_minima = 8
+
+    def calcular_indicadores(self, candles):
+        df = pd.DataFrame(candles)
+        if len(df) < self.ema_lenta + self.rsi_periodo:
+            return None
+        df["ema20"] = df["close"].ewm(span=self.ema_rapida, adjust=False).mean()
+        df["ema50"] = df["close"].ewm(span=self.ema_lenta, adjust=False).mean()
+        delta = df["close"].diff()
+        ganhos = delta.clip(lower=0)
+        perdas = -delta.clip(upper=0)
+        media_ganho = ganhos.ewm(alpha=1/self.rsi_periodo, adjust=False).mean()
+        media_perda = perdas.ewm(alpha=1/self.rsi_periodo, adjust=False).mean()
+        rs = media_ganho / media_perda
+        df["rsi"] = 100 - (100 / (1 + rs))
+        return df
+
+    def analisar(self, candles):
+        df = self.calcular_indicadores(candles)
+        if df is None:
+            return None
+        atual = df.iloc[-1]
+        anterior = df.iloc[-2]
+        pontos_call = 0
+        pontos_put = 0
+        motivos_call = []
+        motivos_put = []
+
+        # CALL
+        if atual["ema20"] > atual["ema50"]:
+            pontos_call += 2
+            motivos_call.append("EMA20 acima EMA50")
+        if atual["ema20"] > anterior["ema20"]:
+            pontos_call += 1
+            motivos_call.append("EMA20 inclinada para cima")
+        distancia_ema = abs(atual["close"] - atual["ema20"]) / atual["ema20"]
+        if distancia_ema <= 0.0015:
+            pontos_call += 2
+            motivos_call.append("Pullback próximo EMA20")
+        if atual["close"] > atual["open"]:
+            pontos_call += 2
+            motivos_call.append("Candle de confirmação")
+        if atual["close"] > atual["ema20"]:
+            pontos_call += 2
+            motivos_call.append("Fechamento acima EMA20")
+        if 50 <= atual["rsi"] <= 70:
+            pontos_call += 1
+            motivos_call.append(f"RSI favorável ({atual['rsi']:.1f})")
+
+        # PUT
+        if atual["ema20"] < atual["ema50"]:
+            pontos_put += 2
+            motivos_put.append("EMA20 abaixo EMA50")
+        if atual["ema20"] < anterior["ema20"]:
+            pontos_put += 1
+            motivos_put.append("EMA20 inclinada para baixo")
+        if distancia_ema <= 0.0015:
+            pontos_put += 2
+            motivos_put.append("Pullback próximo EMA20")
+        if atual["close"] < atual["open"]:
+            pontos_put += 2
+            motivos_put.append("Candle de confirmação")
+        if atual["close"] < atual["ema20"]:
+            pontos_put += 2
+            motivos_put.append("Fechamento abaixo EMA20")
+        if 30 <= atual["rsi"] <= 50:
+            pontos_put += 1
+            motivos_put.append(f"RSI favorável ({atual['rsi']:.1f})")
+
+        # Filtro mercado esticado
+        if atual["rsi"] > 70:
+            pontos_call = 0
+        if atual["rsi"] < 30:
+            pontos_put = 0
+
+        if pontos_call >= self.pontuacao_minima:
+            return ('CALL', min(70 + pontos_call * 2, 95), pontos_call, motivos_call)
+        if pontos_put >= self.pontuacao_minima:
+            return ('PUT', min(70 + pontos_put * 2, 95), pontos_put, motivos_put)
         return None
 
-class MHI2:
-    offset = 1
-    def analisar(self, velas):
-        if len(velas) < 10: return None
-        q = list(velas)[-6:-3]
-        calls = sum(1 for v in q if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls == 1: return ('CALL', 68)
-        elif puts == 1: return ('PUT', 68)
-        return None
-
-class Vituxo2:
-    offset = 2
-    def analisar(self, velas):
-        if len(velas) < 10: return None
-        q = list(velas)[-6:-3]
-        calls = sum(1 for v in q if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls > puts: return ('CALL', 70)
-        elif puts > calls: return ('PUT', 70)
-        return None
-
-class MilhaoMinoria:
-    offset = 0
-    def analisar(self, velas):
-        if len(velas) < 11: return None
-        q = list(velas)[-11:-6]
-        calls = sum(1 for v in q if v['close'] > v['open'])
-        puts = 5 - calls
-        if 0 < calls < puts: return ('CALL', 72)
-        elif 0 < puts < calls: return ('PUT', 72)
-        return None
-
-class C3:
-    offset = 0
-    def analisar(self, velas):
-        if len(velas) < 7: return None
-        ref = velas[-6]
-        if ref['close'] > ref['open']: return ('CALL', 65)
-        elif ref['close'] < ref['open']: return ('PUT', 65)
-        return None
-
-# Bot
-class BotM1:
+class BotSemGale:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.estrategias = [
-            ('MHI 1', MHI1()),
-            ('MHI 2', MHI2()),
-            ('VITUXO 2.0', Vituxo2()),
-            ('Milhão Minoria', MilhaoMinoria()),
-            ('C3', C3())
-        ]
+        self.estrategia = EstrategiaSemGale()
         self.iq_api = None
-        self.placar = {'w': 0, 'g1': 0, 'l': 0}
+        self.placar = {'w': 0, 'l': 0}
         self.ult_sinal = 0
         self.ultimo_dia = datetime.now(FUSO_BR).day
 
@@ -181,52 +204,15 @@ class BotM1:
                         if not api:
                             break
 
-    def buscar_sinal_consenso(self):
-        hora = datetime.now(FUSO_BR).hour
-        if hora < 8 or hora > 12:
-            return None
-
+    def buscar_sinal(self):
         for par, velas in self.velas.items():
-            if len(velas) < 30:
+            if len(velas) < 70:  # precisa de pelo menos 50+14 velas
                 continue
-
-            # Tendência SMA20
-            precos = [v['close'] for v in velas]
-            sma20 = sum(precos[-20:]) / 20
-            atual = precos[-1]
-
-            votos_call = []
-            votos_put = []
-            for nome_est, est in self.estrategias:
-                resultado = est.analisar(velas)
-                if resultado:
-                    direcao, conf = resultado
-                    if conf >= CONFIANCA_MINIMA:
-                        if direcao == 'CALL':
-                            votos_call.append(conf)
-                        else:
-                            votos_put.append(conf)
-
-            # Exige consenso de pelo menos 3 estratégias
-            if len(votos_call) >= 3 and atual > sma20:
-                conf_media = sum(votos_call) / len(votos_call)
-                vela = velas[-1]
-                corpo = abs(vela['close'] - vela['open'])
-                if corpo > 0:
-                    pavio_sup = vela['high'] - max(vela['close'], vela['open'])
-                    if pavio_sup > corpo * 0.4:
-                        continue
-                return {'ativo': par, 'direcao': 'CALL', 'confianca': conf_media}
-
-            if len(votos_put) >= 3 and atual < sma20:
-                conf_media = sum(votos_put) / len(votos_put)
-                vela = velas[-1]
-                corpo = abs(vela['close'] - vela['open'])
-                if corpo > 0:
-                    pavio_inf = min(vela['close'], vela['open']) - vela['low']
-                    if pavio_inf > corpo * 0.4:
-                        continue
-                return {'ativo': par, 'direcao': 'PUT', 'confianca': conf_media}
+            resultado = self.estrategia.analisar(list(velas))
+            if resultado:
+                direcao, conf, pontuacao, motivos = resultado
+                return {'ativo': par, 'direcao': direcao, 'confianca': conf,
+                        'pontuacao': pontuacao, 'motivos': motivos}
         return None
 
     def calcular_horario_entrada(self):
@@ -270,35 +256,14 @@ class BotM1:
             self.placar['w'] += 1
             resultado = "✅ WIN"
         else:
-            if USAR_GALE:
-                proxima_vela = horario_entrada + timedelta(minutes=1)
-                agora = datetime.now(FUSO_BR)
-                espera = (proxima_vela + timedelta(minutes=1) - agora).total_seconds()
-                if espera > 0:
-                    await asyncio.sleep(espera)
-                await asyncio.sleep(5)
-                await self.atualizar_velas()
-                velas = self.velas[ativo]
-                ganhou_gale = False
-                for v in velas:
-                    if v['time'].replace(second=0, microsecond=0) == proxima_vela.replace(second=0, microsecond=0):
-                        ganhou_gale = v['close'] > v['open'] if direcao == 'CALL' else v['close'] < v['open']
-                        break
-                if ganhou_gale:
-                    self.placar['g1'] += 1
-                    resultado = "✅ WIN GALE 1"
-                else:
-                    self.placar['l'] += 1
-                    resultado = "❌ LOSS"
-            else:
-                self.placar['l'] += 1
-                resultado = "❌ LOSS"
+            self.placar['l'] += 1
+            resultado = "❌ LOSS"
 
-        total = self.placar['w'] + self.placar['g1'] + self.placar['l']
-        tx = round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1) if total > 0 else 0.0
+        total = self.placar['w'] + self.placar['l']
+        tx = round((self.placar['w'] / total) * 100, 1) if total > 0 else 0.0
         msg = f"""{resultado}
 📊 {ativo}-OTC | {direcao} {'🟢' if direcao=='CALL' else '🔴'}
-📊 Placar: 🟢{self.placar['w']}W 🟡{self.placar['g1']}G1 🔴{self.placar['l']}L
+📊 Placar: 🟢{self.placar['w']}W 🔴{self.placar['l']}L
 🎯 Assertividade: {tx}%"""
         self.tg.send(msg)
 
@@ -306,19 +271,19 @@ class BotM1:
         agora = datetime.now(FUSO_BR)
         if agora.day != self.ultimo_dia:
             self.ultimo_dia = agora.day
-            self.placar = {'w': 0, 'g1': 0, 'l': 0}
+            self.placar = {'w': 0, 'l': 0}
             self.tg.send("🔄 *PLACAR ZERADO AUTOMATICAMENTE PARA O NOVO DIA*")
             print("🔄 Placar zerado para o novo dia.")
 
     async def executar(self):
         banner()
-        print("⚛️ Bot M1 com consenso forte iniciando...")
-        self.tg.send("🔥 *QUANTUM IA M1 ATIVADO*\n📊 Consenso de 3+ estratégias\n🛡️ Filtros: horário, pavio, tendência\n🔄 Placar diário automático")
+        print("⚛️ Bot Sem Gale iniciando...")
+        self.tg.send("🔥 *QUANTUM IA M1 ATIVADO*\n📊 Estratégia Sem Gale (EMA20/EMA50 + RSI)\n🛡️ Sem martingale\n🔄 Placar diário automático")
         while True:
             try:
                 self.verificar_zeramento_diario()
                 await self.atualizar_velas()
-                sinal = self.buscar_sinal_consenso()
+                sinal = self.buscar_sinal()
                 if sinal and time.time() - self.ult_sinal > INTERVALO_MINIMO:
                     horario_entrada = self.calcular_horario_entrada()
                     horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
@@ -339,5 +304,5 @@ class BotM1:
                 await asyncio.sleep(10)
 
 if __name__ == "__main__":
-    bot = BotM1()
+    bot = BotSemGale()
     asyncio.run(bot.executar())
