@@ -2,9 +2,9 @@
 """
 ⚛️ QUANTUM IA M5 - FOREX REAL (MERCADO ABERTO)
 🕯️ Estratégias: Mortalha, Formiga, Fortaleza, Raio Negro, Tsunami
-🎯 Confluência de 2+ estratégias + tendência SMA20 + pavio 50%
-📊 Filtro de volatilidade (ATR 14) calibrado para Forex real
-🕐 Filtro de horário (segunda a sexta, 6h às 18h)
+🎯 Confluência de 1+ estratégia + tendência SMA20 + pavio 50%
+📊 Filtro de volatilidade (ATR 14) ampliado
+🕐 Horário: 4h às 20h (segunda a sexta)
 🔄 Placar diário automático
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os, random
@@ -19,14 +19,14 @@ FUSO_BR = timezone(timedelta(hours=-3))
 INTERVALO_MINIMO = 600       # 10 min entre sinais
 USAR_GALE = True
 ANTECEDENCIA = 30            # segundos antes da entrada
-CONFIANCA_MINIMA = 65        # confiança mínima
+CONFIANCA_MINIMA = 60        # confiança mínima reduzida
 
-# Volatilidade ATR (calibrado para Forex real)
-ATR_MIN = 0.0003
-ATR_MAX = 0.0010
+# Volatilidade ATR ampliada
+ATR_MIN = 0.0001
+ATR_MAX = 0.0020
 
 def banner():
-    print("⚛️ QUANTUM IA M5 - Forex Real | Confluência + Volatilidade")
+    print("⚛️ QUANTUM IA M5 - Forex Real | Mais Sinais")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -41,7 +41,6 @@ def carregar_config():
 cfg = carregar_config()
 TOKEN, CHAT = cfg['token'], cfg['chat']
 
-# Pares Forex reais (apenas os mais líquidos)
 ATIVOS = {
     "EURUSD": "EURUSD",
     "GBPUSD": "GBPUSD",
@@ -56,17 +55,16 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-# Filtro de horário (evita madrugada e fim de semana)
 def horario_ok():
     agora = datetime.now(FUSO_BR)
-    if agora.weekday() >= 5:  # 5 = sábado, 6 = domingo
+    if agora.weekday() >= 5:
         return False
     hora = agora.hour
-    if hora < 6 or hora > 18:
+    if hora < 4 or hora > 20:
         return False
     return True
 
-# ==================== 5 ESTRATÉGIAS ====================
+# Estratégias (mantidas iguais)
 class Mortalha:
     def sma(self, d, p):
         try:
@@ -185,7 +183,7 @@ class Tsunami:
             return None, 0
         except: return None, 0
 
-# ==================== BOT ====================
+# Bot
 class BotM5:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
@@ -302,7 +300,8 @@ class BotM5:
                         else:
                             votos_put.append(conf)
 
-            if len(votos_call) >= 2 and atual > sma20:
+            # Confluência de 1+ estratégia
+            if len(votos_call) >= 1 and atual > sma20:
                 conf_media = sum(votos_call) / len(votos_call)
                 vela = velas[-1]
                 corpo = abs(vela['close'] - vela['open'])
@@ -312,7 +311,7 @@ class BotM5:
                         continue
                 return {'ativo': par, 'direcao': 'CALL', 'confianca': conf_media}
 
-            if len(votos_put) >= 2 and atual < sma20:
+            if len(votos_put) >= 1 and atual < sma20:
                 conf_media = sum(votos_put) / len(votos_put)
                 vela = velas[-1]
                 corpo = abs(vela['close'] - vela['open'])
@@ -412,7 +411,7 @@ class BotM5:
     async def executar(self):
         banner()
         print("⚛️ Bot M5 Forex real iniciando...")
-        self.tg.send("🔥 *QUANTUM IA M5 FOREX ATIVADO*\n📊 5 Estratégias: Mortalha, Formiga, Fortaleza, Raio Negro, Tsunami\n🎯 Confluência de 2+ estratégias\n📊 Filtro de volatilidade e horário\n🔄 Placar diário automático")
+        self.tg.send("🔥 *QUANTUM IA M5 FOREX ATIVADO*\n📊 5 Estratégias: Mortalha, Formiga, Fortaleza, Raio Negro, Tsunami\n🎯 Confluência de 1+ estratégia\n📊 Filtro de volatilidade ampliado\n🔄 Placar diário automático")
         while True:
             try:
                 self.verificar_zeramento_diario()
