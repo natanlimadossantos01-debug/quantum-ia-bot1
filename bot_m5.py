@@ -5,6 +5,7 @@
 📡 Fonte de dados: Yahoo Finance (grátis, sem login)
 🎯 6 Pares Forex
 🔄 Gale 1 normal
+🕐 Horário: 06h-22h (Brasil)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,7 @@ ANTECEDENCIA = 30
 SCORE_MINIMO = 70
 
 def banner():
-    print("⚛️ ICT SILVER BULLET - 6 Pares Forex")
+    print("⚛️ ICT SILVER BULLET - Forex Real (06h-22h)")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -37,7 +38,7 @@ def carregar_config():
 cfg = carregar_config()
 TOKEN, CHAT = cfg['token'], cfg['chat']
 
-# 6 Pares Forex (Yahoo Finance symbols)
+# 6 Pares Forex
 ATIVOS = {
     "EURUSD": "EURUSD=X",
     "GBPUSD": "GBPUSD=X",
@@ -57,9 +58,9 @@ class Telegram:
 
 class ICTSilverBullet:
     def __init__(self):
-        self.horarios_londres = [(6, 8)]
-        self.horarios_ny_am = [(10, 12)]
-        self.horarios_ny_pm = [(15, 17)]
+        # Horário expandido: 06h - 22h
+        self.horario_inicio = 6
+        self.horario_fim = 22
     
     def horario_ok(self):
         agora = datetime.now(FUSO_BR)
@@ -70,9 +71,10 @@ class ICTSilverBullet:
         if dia >= 5:
             return False
         
-        for inicio, fim in self.horarios_londres + self.horarios_ny_am + self.horarios_ny_pm:
-            if inicio <= hora < fim:
-                return True
+        # Horário expandido
+        if self.horario_inicio <= hora < self.horario_fim:
+            return True
+        
         return False
     
     def analisar(self, velas):
@@ -95,31 +97,24 @@ class ICTSilverBullet:
         pavio_inf = min(vela['close'], vela['open']) - vela['low']
         
         detalhes = {}
-        score_call = 0
-        score_put = 0
         
         # CALL
         if atual > ema20 and vela['low'] <= min_5 * 1.001:
             if pavio_inf >= corpo * 1.5:
-                score_call = 80
                 detalhes['setup'] = 'SILVER BULLET CALL'
                 detalhes['tendencia'] = 'ALTA'
                 detalhes['zona'] = 'SUPORTE'
                 detalhes['rejeicao'] = 'PAVIO INFERIOR'
+                return 'CALL', 80, detalhes
         
         # PUT
         if atual < ema20 and vela['high'] >= max_5 * 0.999:
             if pavio_sup >= corpo * 1.5:
-                score_put = 80
                 detalhes['setup'] = 'SILVER BULLET PUT'
                 detalhes['tendencia'] = 'BAIXA'
                 detalhes['zona'] = 'RESISTÊNCIA'
                 detalhes['rejeicao'] = 'PAVIO SUPERIOR'
-        
-        if score_call > score_put and score_call >= SCORE_MINIMO:
-            return 'CALL', score_call, detalhes
-        elif score_put > score_call and score_put >= SCORE_MINIMO:
-            return 'PUT', score_put, detalhes
+                return 'PUT', 80, detalhes
         
         return None, 0, detalhes
 
@@ -221,7 +216,6 @@ class BotICT:
             await asyncio.sleep(espera)
         await asyncio.sleep(30)
         
-        # Atualiza velas
         self.atualizar_velas()
         velas = self.velas[ativo]
         
@@ -280,6 +274,7 @@ class BotICT:
         print("⚛️ Bot ICT Silver Bullet iniciando...")
         print("📡 Fonte: Yahoo Finance")
         print(f"📊 Pares: {', '.join(ATIVOS.keys())}")
+        print("🕐 Horário: 06h - 22h")
         
         self.tg.send("""🔥 *ICT SILVER BULLET ATIVADO*
 
@@ -287,11 +282,7 @@ class BotICT:
 📡 Fonte: Yahoo Finance (sem login)
 🎯 6 Pares Forex
 🔄 Gale 1
-
-*Horários de operação:*
-• Londres: 06h-08h
-• NY AM: 10h-12h
-• NY PM: 15h-17h""")
+🕐 Horário: 06h - 22h (Brasil)""")
         
         while True:
             try:
