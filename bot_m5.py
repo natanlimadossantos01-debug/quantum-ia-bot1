@@ -301,10 +301,11 @@ class BotM5:
                     for nome_est, est in self.estrategias:
                         if nome_est == est_nome:
                             resultado = est.analisar(self.velas[par])
-                            if resultado:
-                                d, c = resultado
-                                if self.pavio_ok(self.velas[par], d):
-                                    return {'ativo': par, 'direcao': d, 'confianca': c, 'estrategia': nome_est}
+                            if resultado and len(resultado) >= 2:
+                                d, c = resultado[0], resultado[1]
+                                if d in ('CALL', 'PUT') and c > 0:
+                                    if self.pavio_ok(self.velas[par], d):
+                                        return {'ativo': par, 'direcao': d, 'confianca': c, 'estrategia': nome_est}
         
         # Varredura geral
         for par, velas in self.velas.items():
@@ -315,10 +316,11 @@ class BotM5:
                 continue
             for nome_est, est in self.estrategias:
                 resultado = est.analisar(velas)
-                if resultado:
-                    d, c = resultado
-                    if self.pavio_ok(velas, d):
-                        return {'ativo': par, 'direcao': d, 'confianca': c, 'estrategia': nome_est}
+                if resultado and len(resultado) >= 2:
+                    d, c = resultado[0], resultado[1]
+                    if d in ('CALL', 'PUT') and c > 0:
+                        if self.pavio_ok(velas, d):
+                            return {'ativo': par, 'direcao': d, 'confianca': c, 'estrategia': nome_est}
         return None
 
     def calcular_horario_entrada(self):
