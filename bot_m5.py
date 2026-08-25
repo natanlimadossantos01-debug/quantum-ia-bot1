@@ -383,11 +383,19 @@ class Bot:
         print("⚛️ Bot M5 Forex iniciando...")
         self.tg.send(f"🔥 *QUANTUM IA M5*\n📊 5 Estratégias\n🎯 Confiança {CONFIANCA_MINIMA}%+\n⏱️ Análise 30s antes\n🔄 Gale 1")
         
+        if not self.conectar_iq():
+            print("❌ Falha conexão!")
+            return
+        
+        await self.atualizar_velas()
+        
         while True:
             try:
                 self.verificar_zeramento_diario()
                 
                 agora = datetime.now(FUSO_BR)
+                
+                # Heartbeat
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
                     print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
@@ -396,15 +404,15 @@ class Bot:
                         print("🔄 Sem velas! Reconectando...")
                         self.iq_api = None
                 
-                # Atualiza velas
-                await self.atualizar_velas()
+                # Atualiza velas a cada 30s
+                if agora.second in [0, 30]:
+                    await self.atualizar_velas()
                 
                 # Calcula horário de entrada
                 horario_entrada = self.calcular_horario_entrada()
                 horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
                 
                 # Verifica se está no momento de analisar (30s antes)
-                agora = datetime.now(FUSO_BR)
                 tempo_ate_envio = (horario_envio - agora).total_seconds()
                 
                 # Só analisa quando estiver a 35 segundos ou menos da entrada
@@ -432,4 +440,4 @@ class Bot:
                 await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(Bot().run())
+    asyncio.run(Bot().executar())
