@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM IA M5 - FOREX REAL - ANTI-TRAVAMENTO
-🧠 Catálogo Inteligente (troca automática)
-📊 26 Estratégias
+⚛️ QUANTUM IA M5 - FOREX REAL - CORREÇÃO CORRETA
+🧠 Catálogo Inteligente
+📊 5 Estratégias
 🛡️ Filtro Pavio + Volatilidade
-🔄 Reconexão automática agressiva
-💓 Heartbeat a cada minuto
-⚡ Sem bloqueio de par
+🔄 Reconexão automática
+💓 Heartbeat
+✅ Correção: close vs open (fechamento real)
 """
-import asyncio, time, requests, numpy as np, signal, sys, json, os, random
+import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
-from collections import deque, defaultdict
+from collections import deque
 from pathlib import Path
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
-INTERVALO_MINIMO = 300       # 5 min entre sinais
+INTERVALO_MINIMO = 300
 USAR_GALE = True
 ANTECEDENCIA = 30
 CONFIANCA_MINIMA = 62
@@ -25,7 +25,7 @@ ATR_MIN = 0.0001
 ATR_MAX = 0.0008
 
 def banner():
-    print("⚛️ QUANTUM IA M5 - Forex Anti-Travamento")
+    print("⚛️ QUANTUM IA M5 - Forex | Correção Correta")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -67,9 +67,6 @@ class Telegram:
 class CatalogadorInteligente:
     def __init__(self):
         self.performance = {}
-        self.combinacao_atual = None
-        self.sinais_na_combinacao = 0
-        self.max_sinais_por_combinacao = 3  # Troca a cada 3 sinais
         self.total_operacoes = 0
         
     def registrar(self, estrategia, par, venceu):
@@ -87,30 +84,8 @@ class CatalogadorInteligente:
             p = self.performance[chave]
             return round((p['wins']/p['total'])*100, 1) if p['total'] > 0 else 0
         return 0
-    
-    def escolher_melhor(self):
-        melhores = []
-        for chave, p in self.performance.items():
-            taxa = (p['wins']/p['total'])*100 if p['total'] > 0 else 0
-            melhores.append({'estrategia': p['estrategia'], 'par': p['par'], 'taxa': taxa, 'total': p['total']})
-        melhores.sort(key=lambda x: x['taxa'], reverse=True)
-        return melhores[0] if melhores else None
-    
-    def precisa_trocar(self):
-        if not self.combinacao_atual: return True
-        if self.sinais_na_combinacao >= self.max_sinais_por_combinacao: return True
-        return False
-    
-    def atualizar_combinacao(self):
-        if self.precisa_trocar():
-            melhor = self.escolher_melhor()
-            if melhor:
-                self.combinacao_atual = {'estrategia': melhor['estrategia'], 'par': melhor['par'], 'taxa': melhor['taxa']}
-                self.sinais_na_combinacao = 0
-                return True, melhor
-        return False, self.combinacao_atual
 
-# 5 Estratégias principais (as que funcionavam)
+# 5 Estratégias
 class Mortalha:
     def sma(self, d, p):
         try:
@@ -273,7 +248,6 @@ class QuantumIA:
             return pavio_inf <= corpo * 0.6
 
     def obter_sinal(self, velas_dict):
-        # Varredura geral (sem travar no catálogo)
         melhor = None
         melhor_score = 0
         
@@ -371,14 +345,18 @@ class Bot:
         self.sinais = 0
         self.ultimo_dia = datetime.now(FUSO_BR).day
 
-    def fmt_sinal(self, s):
+    def calcular_horario_entrada(self):
         agora = datetime.now(FUSO_BR)
         minuto = agora.minute
         resto = minuto % 5
         if resto == 0 and agora.second == 0:
-            he = (agora.replace(second=0, microsecond=0)).strftime('%H:%M')
+            return agora.replace(second=0, microsecond=0)
         else:
-            he = (agora.replace(second=0, microsecond=0) + timedelta(minutes=5-resto)).strftime('%H:%M')
+            return agora.replace(second=0, microsecond=0) + timedelta(minutes=5 - resto)
+
+    def fmt_sinal(self, s):
+        horario = self.calcular_horario_entrada()
+        he = horario.strftime('%H:%M')
         e = "🟢" if s['direcao'] == 'CALL' else "🔴"
         return f"""🚨SINAL AO VIVO🚨
 
@@ -405,48 +383,78 @@ class Bot:
     async def corrigir(self, sinal):
         at = sinal['ativo']
         d = sinal['direcao']
+        estrategia = sinal['estrategia']
+        
         try:
-            await asyncio.sleep(300)
+            horario_entrada = self.calcular_horario_entrada()
+            
+            # Aguarda o fechamento da vela M5
+            agora = datetime.now(FUSO_BR)
+            espera = (horario_entrada + timedelta(minutes=5) - agora).total_seconds()
+            if espera > 0:
+                await asyncio.sleep(espera)
+            await asyncio.sleep(10)
+            
             self.iq.atualizar()
-            v = self.iq.velas[at]
-            if len(v) < 2:
-                self.op = False
-                return
-            pc = v[-1]['open']
-            await asyncio.sleep(5)
-            v = self.iq.velas[at]
-            if len(v) > 0 and ((d == 'CALL' and v[-1]['high'] > pc) or (d == 'PUT' and v[-1]['low'] < pc)):
-                r = "✅ WIN"
+            velas = self.iq.velas[at]
+            
+            # ✅ CORREÇÃO: verifica close vs open
+            ganhou = False
+            for vela in velas:
+                if vela['time'].replace(second=0, microsecond=0) == horario_entrada.replace(second=0, microsecond=0):
+                    if d == 'CALL':
+                        ganhou = vela['close'] > vela['open']
+                    else:
+                        ganhou = vela['close'] < vela['open']
+                    break
+            
+            if ganhou:
                 self.placar['w'] += 1
-                self.tg.send(self.fmt_corr(r, sinal))
+                self.m.catalogador.registrar(estrategia, at, True)
+                self.tg.send(self.fmt_corr("✅ WIN", sinal))
                 self.op = False
                 return
+            
             # Gale 1
-            await asyncio.sleep(300)
+            proxima_vela = horario_entrada + timedelta(minutes=5)
+            agora = datetime.now(FUSO_BR)
+            espera = (proxima_vela + timedelta(minutes=5) - agora).total_seconds()
+            if espera > 0:
+                await asyncio.sleep(espera)
+            await asyncio.sleep(10)
+            
             self.iq.atualizar()
-            v = self.iq.velas[at]
-            if len(v) > 0:
-                pg = v[-1]['open']
-                await asyncio.sleep(5)
-                v = self.iq.velas[at]
-                if len(v) > 0 and ((d == 'CALL' and v[-1]['high'] > pg) or (d == 'PUT' and v[-1]['low'] < pg)):
-                    r = "✅ WIN GALE 1"
-                    self.placar['g1'] += 1
-                    self.tg.send(self.fmt_corr(r, sinal))
-                    self.op = False
-                    return
-            r = "❌ LOSS"
+            velas = self.iq.velas[at]
+            
+            ganhou_gale = False
+            for vela in velas:
+                if vela['time'].replace(second=0, microsecond=0) == proxima_vela.replace(second=0, microsecond=0):
+                    if d == 'CALL':
+                        ganhou_gale = vela['close'] > vela['open']
+                    else:
+                        ganhou_gale = vela['close'] < vela['open']
+                    break
+            
+            if ganhou_gale:
+                self.placar['g1'] += 1
+                self.m.catalogador.registrar(estrategia, at, True)
+                self.tg.send(self.fmt_corr("✅ WIN GALE 1", sinal))
+                self.op = False
+                return
+            
             self.placar['l'] += 1
-            self.tg.send(self.fmt_corr(r, sinal))
+            self.m.catalogador.registrar(estrategia, at, False)
+            self.tg.send(self.fmt_corr("❌ LOSS", sinal))
             self.op = False
+            
         except Exception as e:
-            print(f"Erro: {e}")
+            print(f"Erro correção: {e}")
             self.op = False
 
     async def run(self):
         banner()
-        print("⚛️ Bot M5 Forex anti-travamento iniciando...")
-        self.tg.send(f"🔥 *QUANTUM IA M5*\n📊 5 Estratégias\n🎯 Confiança {CONFIANCA_MINIMA}%+\n🛡️ Pavio + Volatilidade\n🔄 Anti-travamento\n💓 Heartbeat")
+        print("⚛️ Bot M5 Forex iniciando...")
+        self.tg.send(f"🔥 *QUANTUM IA M5*\n📊 5 Estratégias\n🎯 Confiança {CONFIANCA_MINIMA}%+\n✅ Correção: close vs open\n🔄 Gale 1")
         
         if not self.iq.conectar():
             print("❌ Falha conexão!")
@@ -458,7 +466,6 @@ class Bot:
             try:
                 agora = datetime.now(FUSO_BR)
                 
-                # Heartbeat
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.iq.velas.values())
                     print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
