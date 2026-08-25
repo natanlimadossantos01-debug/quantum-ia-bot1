@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM IA M5 - FOREX - ANÁLISE 30s ANTES
-🎯 Analisa até 30 segundos antes da entrada
-📊 Confiança mínima: 62%
-🛡️ Filtro de volatilidade
-🔄 Gale 1
-✅ Correção: close vs open
+⚛️ QUANTUM IA M5 - FOREX - HORÁRIO CORRIGIDO
+🕐 Seg-Sex: 00:00-16:00 | Sex 16:00 até Seg 00:00 FECHADO
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -17,15 +13,22 @@ FUSO_BR = timezone(timedelta(hours=-3))
 
 INTERVALO_MINIMO = 300
 USAR_GALE = True
-ANTECEDENCIA = 30            # Envia 30 segundos antes
+ANTECEDENCIA = 30
 CONFIANCA_MINIMA = 62
-TIMEFRAME = 300              # M5
+TIMEFRAME = 300
 
 ATR_MIN = 0.00005
 ATR_MAX = 0.0050
 
+PAVIO_LIMITE_SUPERIOR = 0.40
+PAVIO_LIMITE_INFERIOR = 0.40
+PAVIO_SOMA_LIMITE = 0.60
+VERIFICAR_VELAS_ANTERIORES = 2
+
+LINK_OTC = "https://t.me/+zJCToudf0F5lM2M5"
+
 def banner():
-    print("⚛️ QUANTUM IA M5 - Análise 30s Antes")
+    print("⚛️ QUANTUM IA M5 - Forex | Horário Corrigido")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -64,7 +67,72 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-# 5 Estratégias
+# ═══════════════════════════════════════════
+# HORÁRIO DE MERCADO (CORRIGIDO)
+# ═══════════════════════════════════════════
+def mercado_aberto():
+    """
+    Mercado abre:
+    - Segunda a sexta: 00:00 às 16:00
+    - Sábado: FECHADO
+    - Domingo: FECHADO (abre segunda 00:00)
+    """
+    agora = datetime.now(FUSO_BR)
+    dia_semana = agora.weekday()  # 0=segunda, 4=sexta, 5=sábado, 6=domingo
+    hora = agora.hour
+    
+    # Sábado e Domingo: FECHADO
+    if dia_semana >= 5:
+        return False
+    
+    # Segunda a sexta: aberto das 00:00 às 16:00
+    return hora < 16
+
+def horario_fechamento_diario():
+    """Fecha todo dia às 15:55 (para avisar)"""
+    agora = datetime.now(FUSO_BR)
+    if agora.weekday() >= 5:
+        return False
+    return agora.hour == 15 and agora.minute >= 55
+
+def horario_abertura_diario():
+    """Abre todo dia às 00:00 (para avisar)"""
+    agora = datetime.now(FUSO_BR)
+    if agora.weekday() >= 5:
+        return False
+    return agora.hour == 0 and agora.minute == 0
+
+# ═══════════════════════════════════════════
+# FILTRO ANTI-PAVIO
+# ═══════════════════════════════════════════
+def tem_pavio_excessivo(vela):
+    corpo = abs(vela['close'] - vela['open'])
+    range_total = vela['high'] - vela['low']
+    
+    if range_total == 0:
+        return True
+    
+    pavio_sup = vela['high'] - max(vela['close'], vela['open'])
+    pavio_inf = min(vela['close'], vela['open']) - vela['low']
+    
+    pct_pavio_sup = pavio_sup / range_total
+    pct_pavio_inf = pavio_inf / range_total
+    pct_pavio_total = (pavio_sup + pavio_inf) / range_total
+    
+    if pct_pavio_sup > PAVIO_LIMITE_SUPERIOR:
+        return True
+    if pct_pavio_inf > PAVIO_LIMITE_INFERIOR:
+        return True
+    if pct_pavio_total > PAVIO_SOMA_LIMITE:
+        return True
+    if corpo / range_total < 0.1:
+        return True
+    
+    return False
+
+# ═══════════════════════════════════════════
+# 5 ESTRATÉGIAS (mantidas)
+# ═══════════════════════════════════════════
 class Mortalha:
     def sma(self, d, p):
         try:
@@ -196,9 +264,12 @@ class Bot:
         ]
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
+        self.ops_do_dia = []
         self.ult_sinal = 0
         self.sinais = 0
         self.ultimo_dia = datetime.now(FUSO_BR).day
+        self.fechamento_enviado = False
+        self.abertura_enviada = False
 
     def conectar_iq(self):
         from iqoptionapi.stable_api import IQ_Option
@@ -267,9 +338,21 @@ class Bot:
         for par, velas in self.velas.items():
             if len(velas) < 30:
                 continue
+            
+            tem_pavio = False
+            for i in range(1, VERIFICAR_VELAS_ANTERIORES + 1):
+                if len(velas) >= i:
+                    if tem_pavio_excessivo(velas[-i]):
+                        tem_pavio = True
+                        break
+            
+            if tem_pavio:
+                continue
+            
             atr = self.calcular_atr(velas, 14)
             if atr is None or atr < ATR_MIN or atr > ATR_MAX:
                 continue
+            
             for nome_est, est in self.estrategias:
                 resultado = est.analisar(velas)
                 if resultado and len(resultado) >= 2:
@@ -310,6 +393,54 @@ class Bot:
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
+    def enviar_fechamento(self):
+        total = self.placar['w'] + self.placar['g1'] + self.placar['l']
+        tx = round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1) if total > 0 else 0
+        
+        ops_txt = ""
+        for op in self.ops_do_dia[-20:]:
+            ops_txt += f"{op}\n"
+        
+        msg = f"""🔔 *MERCADO FECHANDO* 🔔
+
+📊 *RESULTADO FINAL DO DIA*
+
+┌──────────────────────────┐
+│ 🟢 Wins: {self.placar['w']}              │
+│ 🟡 Gale 1: {self.placar['g1']}            │
+│ 🔴 Losses: {self.placar['l']}            │
+│ 📨 Total: {total}              │
+│ 🎯 Assertividade: {tx}%   │
+└──────────────────────────┘
+
+📋 *Operações do dia:*
+{ops_txt if ops_txt else 'Nenhuma operação'}
+
+➡️ *CONTINUE NA SALA OTC AO VIVO:*
+{LINK_OTC}
+
+🔴 *MERCADO FECHADO - VOLTAMOS ÀS 00:00*"""
+        
+        self.tg.send(msg)
+        print("🔔 Mensagem de fechamento enviada!")
+
+    def enviar_abertura(self):
+        msg = f"""🔔 *MERCADO ABRINDO* 🔔
+
+✅ *OPERAÇÕES INICIANDO*
+
+⚛️ QUANTUM IA M5 ATIVADO
+📊 5 Estratégias
+🎯 Confiança {CONFIANCA_MINIMA}%+
+🛡️ Filtro de Pavio
+
+🤖 *ATIVEM SEUS ROBÔS!*
+
+🍀 Boa sorte! 🍀"""
+        
+        self.tg.send(msg)
+        print("🔔 Mensagem de abertura enviada!")
+
     async def monitorar_resultado(self, sinal, horario_entrada):
         ativo = sinal['ativo']
         direcao = sinal['direcao']
@@ -331,9 +462,12 @@ class Bot:
                     ganhou = v['close'] < v['open']
                 break
         
+        hora = horario_entrada.strftime('%H:%M')
+        
         if ganhou:
             self.placar['w'] += 1
             resultado = "✅ WIN"
+            self.ops_do_dia.append(f"✅ {hora} | {ativo} | {direcao} | WIN")
         else:
             if USAR_GALE:
                 proxima_vela = horario_entrada + timedelta(minutes=5)
@@ -355,12 +489,15 @@ class Bot:
                 if ganhou_gale:
                     self.placar['g1'] += 1
                     resultado = "✅ WIN GALE 1"
+                    self.ops_do_dia.append(f"🟡 {hora} | {ativo} | {direcao} | WIN G1")
                 else:
                     self.placar['l'] += 1
                     resultado = "❌ LOSS"
+                    self.ops_do_dia.append(f"🔴 {hora} | {ativo} | {direcao} | LOSS")
             else:
                 self.placar['l'] += 1
                 resultado = "❌ LOSS"
+                self.ops_do_dia.append(f"🔴 {hora} | {ativo} | {direcao} | LOSS")
         
         total = self.placar['w'] + self.placar['g1'] + self.placar['l']
         tx = round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1) if total > 0 else 0.0
@@ -375,13 +512,15 @@ class Bot:
         if agora.day != self.ultimo_dia:
             self.ultimo_dia = agora.day
             self.placar = {'w': 0, 'g1': 0, 'l': 0}
-            self.tg.send("🔄 *PLACAR ZERADO*")
-            print("🔄 Placar zerado.")
+            self.ops_do_dia = []
+            self.fechamento_enviado = False
+            self.abertura_enviada = False
+            print("🔄 Placar zerado para novo dia.")
 
     async def executar(self):
         banner()
         print("⚛️ Bot M5 Forex iniciando...")
-        self.tg.send(f"🔥 *QUANTUM IA M5*\n📊 5 Estratégias\n🎯 Confiança {CONFIANCA_MINIMA}%+\n⏱️ Análise 30s antes\n🔄 Gale 1")
+        self.tg.send(f"🔥 *QUANTUM IA M5*\n📊 5 Estratégias\n🎯 Confiança {CONFIANCA_MINIMA}%+\n🛡️ Anti-Pavio\n🕐 Seg-Sex: 00h-16h\n🔄 Gale 1")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -394,8 +533,27 @@ class Bot:
                 self.verificar_zeramento_diario()
                 
                 agora = datetime.now(FUSO_BR)
+                mercado_estado = mercado_aberto()
                 
-                # Heartbeat
+                # Fechamento diário (15:55)
+                if horario_fechamento_diario() and not self.fechamento_enviado:
+                    self.enviar_fechamento()
+                    self.fechamento_enviado = True
+                    self.abertura_enviada = False
+                
+                # Abertura diária (00:00)
+                if horario_abertura_diario() and not self.abertura_enviada:
+                    self.enviar_abertura()
+                    self.abertura_enviada = True
+                    self.fechamento_enviado = False
+                
+                # Só opera se mercado aberto
+                if not mercado_estado:
+                    if agora.second == 0:
+                        print(f"💤 Mercado fechado. Aguardando...")
+                    await asyncio.sleep(30)
+                    continue
+                
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
                     print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
@@ -404,23 +562,17 @@ class Bot:
                         print("🔄 Sem velas! Reconectando...")
                         self.iq_api = None
                 
-                # Atualiza velas a cada 30s
                 if agora.second in [0, 30]:
                     await self.atualizar_velas()
                 
-                # Calcula horário de entrada
                 horario_entrada = self.calcular_horario_entrada()
                 horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
-                
-                # Verifica se está no momento de analisar (30s antes)
                 tempo_ate_envio = (horario_envio - agora).total_seconds()
                 
-                # Só analisa quando estiver a 35 segundos ou menos da entrada
                 if 0 <= tempo_ate_envio <= 35:
                     sinal = self.buscar_sinal()
                     
                     if sinal and time.time() - self.ult_sinal > INTERVALO_MINIMO:
-                        # Aguarda até exatamente 30s antes
                         if tempo_ate_envio > 0:
                             await asyncio.sleep(tempo_ate_envio)
                         
