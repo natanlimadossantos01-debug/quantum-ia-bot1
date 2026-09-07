@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-⚛️ TOP VIP BLITZ - OTC
+⚛️ TOP VIP M1 - OTC - ALTA ASSERTIVIDADE
 📊 12 Pares OTC
 ⏱️ Timeframe: M1
-⏰ Intervalo: 5 min entre sinais
+⏰ Intervalo: 5 min
 🔄 Gale 1
+💪 Velas Fortes (corpo ≥ 50%)
+🛡️ Filtro Anti-Pavio
+📊 Filtro de Volatilidade (ATR)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -18,10 +21,18 @@ INTERVALO_MINIMO = 300       # 5 min entre sinais
 USAR_GALE = True
 ANTECEDENCIA = 10
 TIMEFRAME = 60               # M1
-CONFIANCA_MINIMA = 55        # Filtro de confiança
+CONFIANCA_MINIMA = 65
+
+FORCA_MINIMA = 50
+ATR_MIN = 0.00005
+ATR_MAX = 0.0030
+
+PAVIO_LIMITE_SUPERIOR = 0.35
+PAVIO_LIMITE_INFERIOR = 0.35
+PAVIO_SOMA_LIMITE = 0.55
 
 def banner():
-    print("⚛️ TOP VIP BLITZ - OTC")
+    print("⚛️ TOP VIP M1 - 12 Pares | Alta Assertividade")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -69,42 +80,75 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-class TopVIPBlitz:
-    """
-    TOP VIP Blitz - Análise M1
-    - Últimas 3 velas
-    - Maioria define direção
-    """
+def tem_pavio_excessivo(vela):
+    corpo = abs(vela['close'] - vela['open'])
+    range_total = vela['high'] - vela['low']
     
+    if range_total == 0:
+        return True
+    
+    pavio_sup = vela['high'] - max(vela['close'], vela['open'])
+    pavio_inf = min(vela['close'], vela['open']) - vela['low']
+    
+    pct_pavio_sup = pavio_sup / range_total
+    pct_pavio_inf = pavio_inf / range_total
+    pct_pavio_total = (pavio_sup + pavio_inf) / range_total
+    
+    if pct_pavio_sup > PAVIO_LIMITE_SUPERIOR:
+        return True
+    if pct_pavio_inf > PAVIO_LIMITE_INFERIOR:
+        return True
+    if pct_pavio_total > PAVIO_SOMA_LIMITE:
+        return True
+    
+    return False
+
+class TopVIP:
+    """
+    TOP VIP M1 - Alta Assertividade
+    - 3 velas de alta → CALL forte (70-90%)
+    - 3 velas de baixa → PUT forte (70-90%)
+    - 2 velas + vela forte → sinal médio (60-80%)
+    """
     def analisar(self, velas):
         if len(velas) < 4:
             return None, 0
         
-        # Últimas 3 velas
         ultimas = list(velas)[-3:]
+        vela = velas[-1]
+        
+        corpo = abs(vela['close'] - vela['open'])
+        range_total = vela['high'] - vela['low']
+        
+        if range_total == 0:
+            return None, 0
+        
+        forca = (corpo / range_total) * 100
+        
+        if forca < FORCA_MINIMA:
+            return None, 0
+        
+        if tem_pavio_excessivo(vela):
+            return None, 0
         
         calls = sum(1 for v in ultimas if v['close'] > v['open'])
         puts = 3 - calls
         
-        # Força da última vela
-        vela = velas[-1]
-        corpo = abs(vela['close'] - vela['open'])
-        range_total = vela['high'] - vela['low']
-        forca = (corpo / range_total * 100) if range_total > 0 else 0
-        
-        if calls >= 2:
-            conf = 55 + forca * 0.3 + (calls - puts) * 10
+        if calls == 3 and vela['close'] > vela['open']:
+            conf = 70 + forca * 0.2
             return 'CALL', min(conf, 90)
-        elif puts >= 2:
-            conf = 55 + forca * 0.3 + (puts - calls) * 10
+        
+        if puts == 3 and vela['close'] < vela['open']:
+            conf = 70 + forca * 0.2
             return 'PUT', min(conf, 90)
         
-        # Empate: segue a última vela
-        if calls == puts:
-            if vela['close'] > vela['open']:
-                return 'CALL', 55 + forca * 0.3
-            else:
-                return 'PUT', 55 + forca * 0.3
+        if calls == 2 and vela['close'] > vela['open']:
+            conf = 60 + forca * 0.25
+            return 'CALL', min(conf, 80)
+        
+        if puts == 2 and vela['close'] < vela['open']:
+            conf = 60 + forca * 0.25
+            return 'PUT', min(conf, 80)
         
         return None, 0
 
@@ -112,7 +156,7 @@ class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.estrategia = TopVIPBlitz()
+        self.estrategia = TopVIP()
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -167,6 +211,18 @@ class Bot:
             except Exception as e:
                 print(f"Erro {nome}: {e}")
 
+    def calcular_atr(self, velas, periodo=14):
+        if len(velas) < periodo + 1:
+            return None
+        trs = []
+        for i in range(-periodo, 0):
+            h = velas[i]['high']
+            l = velas[i]['low']
+            c_prev = velas[i-1]['close'] if i > -periodo else velas[i]['open']
+            tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
+            trs.append(tr)
+        return np.mean(trs)
+
     def buscar_sinal(self):
         melhor = None
         melhor_score = 0
@@ -174,6 +230,11 @@ class Bot:
         for par, velas in self.velas.items():
             if len(velas) < 4:
                 continue
+            
+            atr = self.calcular_atr(velas, 14)
+            if atr is None or atr < ATR_MIN or atr > ATR_MAX:
+                continue
+            
             direcao, conf = self.estrategia.analisar(velas)
             if direcao and conf >= CONFIANCA_MINIMA:
                 if conf > melhor_score:
@@ -194,7 +255,7 @@ class Bot:
         
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ TOP VIP BLITZ ✅
+✳️ TOP VIP M1 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {hora}
@@ -203,6 +264,7 @@ class Bot:
 
 📊 Confiança: {conf:.0f}%
 🧠 Estratégia: TOP VIP
+💪 Vela Forte
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -276,8 +338,8 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot TOP VIP Blitz iniciando...")
-        self.tg.send(f"🔥 *TOP VIP BLITZ ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n⏰ Intervalo: 5 min\n🔄 Gale 1")
+        print("⚛️ Bot TOP VIP M1 alta assertividade iniciando...")
+        self.tg.send(f"🔥 *TOP VIP M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Velas Fortes\n🛡️ Anti-Pavio\n📊 ATR\n🔄 Gale 1")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
