@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-⚛️ TOP VIP M1 - OTC - CORREÇÃO EXATA
+⚛️ TOP VIP M1 - OTC - 24 HORAS
 📊 12 Pares OTC
 ⏱️ Timeframe: M1
 ⏰ Intervalo: 5 min
 🔄 Gale 1
-💪 Velas Fortes (corpo ≥ 50%)
-🛡️ Filtro Anti-Pavio
-📊 Filtro de Volatilidade (ATR)
-✅ Correção: verifica vela de entrada primeiro
+💪 Velas (corpo ≥ 30%)
+🛡️ Anti-Pavio Relaxado
+📊 ATR ampliado
+🎯 Confiança mínima: 50%
+⚡ 24/7 (sem filtro de horário)
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -18,22 +19,22 @@ from pathlib import Path
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
-INTERVALO_MINIMO = 300       # 5 min entre sinais
+INTERVALO_MINIMO = 300
 USAR_GALE = True
-ANTECEDENCIA = 10
-TIMEFRAME = 60               # M1
-CONFIANCA_MINIMA = 65
+ANTECEDENCIA = 20
+TIMEFRAME = 60
+CONFIANCA_MINIMA = 50
 
-FORCA_MINIMA = 50
-ATR_MIN = 0.00005
-ATR_MAX = 0.0030
+FORCA_MINIMA = 30
+ATR_MIN = 0.00003
+ATR_MAX = 0.0050
 
-PAVIO_LIMITE_SUPERIOR = 0.35
-PAVIO_LIMITE_INFERIOR = 0.35
-PAVIO_SOMA_LIMITE = 0.55
+PAVIO_LIMITE_SUPERIOR = 0.50
+PAVIO_LIMITE_INFERIOR = 0.50
+PAVIO_SOMA_LIMITE = 0.70
 
 def banner():
-    print("⚛️ TOP VIP M1 - Correção Exata")
+    print("⚛️ TOP VIP M1 - 24h")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -129,20 +130,20 @@ class TopVIP:
         puts = 3 - calls
         
         if calls == 3 and vela['close'] > vela['open']:
-            conf = 70 + forca * 0.2
-            return 'CALL', min(conf, 90)
+            conf = 60 + forca * 0.2
+            return 'CALL', min(conf, 85)
         
         if puts == 3 and vela['close'] < vela['open']:
-            conf = 70 + forca * 0.2
-            return 'PUT', min(conf, 90)
+            conf = 60 + forca * 0.2
+            return 'PUT', min(conf, 85)
         
         if calls == 2 and vela['close'] > vela['open']:
-            conf = 60 + forca * 0.25
-            return 'CALL', min(conf, 80)
+            conf = 50 + forca * 0.25
+            return 'CALL', min(conf, 75)
         
         if puts == 2 and vela['close'] < vela['open']:
-            conf = 60 + forca * 0.25
-            return 'PUT', min(conf, 80)
+            conf = 50 + forca * 0.25
+            return 'PUT', min(conf, 75)
         
         return None, 0
 
@@ -258,7 +259,6 @@ class Bot:
 
 📊 Confiança: {conf:.0f}%
 🧠 Estratégia: TOP VIP
-💪 Vela Forte
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -267,8 +267,6 @@ class Bot:
         direcao = sinal['direcao']
         
         agora = datetime.now(FUSO_BR)
-        
-        # ✅ Aguarda o fechamento da vela de entrada
         espera = (horario_entrada + timedelta(minutes=1) - agora).total_seconds()
         if espera > 0:
             await asyncio.sleep(espera)
@@ -276,7 +274,6 @@ class Bot:
         await self.atualizar_velas()
         velas = self.velas[ativo]
         
-        # ✅ VERIFICA A VELA DE ENTRADA PRIMEIRO
         ganhou = False
         for v in velas:
             if v['time'].replace(second=0, microsecond=0) == horario_entrada.replace(second=0, microsecond=0):
@@ -290,7 +287,6 @@ class Bot:
             self.placar['w'] += 1
             resultado = "✅ WIN"
         else:
-            # GALE 1 - verifica a próxima vela
             if USAR_GALE:
                 proxima_vela = horario_entrada + timedelta(minutes=1)
                 agora = datetime.now(FUSO_BR)
@@ -300,7 +296,6 @@ class Bot:
                 await asyncio.sleep(5)
                 await self.atualizar_velas()
                 velas = self.velas[ativo]
-                
                 ganhou_gale = False
                 for v in velas:
                     if v['time'].replace(second=0, microsecond=0) == proxima_vela.replace(second=0, microsecond=0):
@@ -309,7 +304,6 @@ class Bot:
                         else:
                             ganhou_gale = v['close'] < v['open']
                         break
-                
                 if ganhou_gale:
                     self.placar['g1'] += 1
                     resultado = "✅ WIN GALE 1"
@@ -338,8 +332,8 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot TOP VIP M1 iniciando...")
-        self.tg.send(f"🔥 *TOP VIP M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Velas Fortes\n🛡️ Anti-Pavio\n📊 ATR\n🔄 Gale 1\n✅ Correção Exata")
+        print("⚛️ Bot TOP VIP M1 24h iniciando...")
+        self.tg.send(f"🔥 *TOP VIP M1 24H*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n⚡ 24/7\n🔄 Gale 1\n🎯 Confiança {CONFIANCA_MINIMA}%+")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
