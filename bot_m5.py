@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-⚛️ TOP VIP BLITZ - SINAIS RÁPIDOS
-🎯 Modo Blitz: análise a cada 15 segundos
+⚛️ TOP VIP BLITZ - OTC
 📊 12 Pares OTC
-⏱️ Timeframe: M1 (1 minuto)
-⏰ Intervalo: 5 minutos entre sinais
+⏱️ Timeframe: M1
+⏰ Intervalo: 5 min entre sinais
 🔄 Gale 1
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
@@ -15,13 +14,14 @@ from pathlib import Path
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 FUSO_BR = timezone(timedelta(hours=-3))
 
-INTERVALO_MINIMO = 300       # 5 minutos entre sinais
+INTERVALO_MINIMO = 300       # 5 min entre sinais
 USAR_GALE = True
-ANTECEDENCIA = 10            # 10 segundos antes
+ANTECEDENCIA = 10
 TIMEFRAME = 60               # M1
+CONFIANCA_MINIMA = 55        # Filtro de confiança
 
 def banner():
-    print("⚛️ TOP VIP BLITZ - 12 Pares | 5min")
+    print("⚛️ TOP VIP BLITZ - OTC")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -71,43 +71,40 @@ class Telegram:
 
 class TopVIPBlitz:
     """
-    TOP VIP Blitz - Análise rápida de M1
-    - Analisa últimas 2 velas
-    - Se ambas de alta → CALL
-    - Se ambas de baixa → PUT
-    - Se 1 alta + 1 baixa → segue a última vela
+    TOP VIP Blitz - Análise M1
+    - Últimas 3 velas
+    - Maioria define direção
     """
     
     def analisar(self, velas):
-        if len(velas) < 3:
+        if len(velas) < 4:
             return None, 0
         
-        v1 = velas[-2]
-        v2 = velas[-1]
+        # Últimas 3 velas
+        ultimas = list(velas)[-3:]
         
-        calls = 0
-        puts = 0
+        calls = sum(1 for v in ultimas if v['close'] > v['open'])
+        puts = 3 - calls
         
-        if v1['close'] > v1['open']:
-            calls += 1
-        else:
-            puts += 1
-        
-        if v2['close'] > v2['open']:
-            calls += 1
-        else:
-            puts += 1
-        
-        corpo = abs(v2['close'] - v2['open'])
-        range_total = v2['high'] - v2['low']
+        # Força da última vela
+        vela = velas[-1]
+        corpo = abs(vela['close'] - vela['open'])
+        range_total = vela['high'] - vela['low']
         forca = (corpo / range_total * 100) if range_total > 0 else 0
         
-        if calls > puts or (calls == puts and v2['close'] > v2['open']):
-            conf = 55 + forca * 0.3
-            return 'CALL', min(conf, 85)
-        elif puts > calls or (calls == puts and v2['close'] < v2['open']):
-            conf = 55 + forca * 0.3
-            return 'PUT', min(conf, 85)
+        if calls >= 2:
+            conf = 55 + forca * 0.3 + (calls - puts) * 10
+            return 'CALL', min(conf, 90)
+        elif puts >= 2:
+            conf = 55 + forca * 0.3 + (puts - calls) * 10
+            return 'PUT', min(conf, 90)
+        
+        # Empate: segue a última vela
+        if calls == puts:
+            if vela['close'] > vela['open']:
+                return 'CALL', 55 + forca * 0.3
+            else:
+                return 'PUT', 55 + forca * 0.3
         
         return None, 0
 
@@ -175,12 +172,13 @@ class Bot:
         melhor_score = 0
         
         for par, velas in self.velas.items():
-            if len(velas) < 3:
+            if len(velas) < 4:
                 continue
             direcao, conf = self.estrategia.analisar(velas)
-            if direcao and conf > melhor_score:
-                melhor_score = conf
-                melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
+            if direcao and conf >= CONFIANCA_MINIMA:
+                if conf > melhor_score:
+                    melhor_score = conf
+                    melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
         
         return melhor
 
@@ -193,17 +191,20 @@ class Bot:
         direcao = sinal['direcao']
         conf = sinal['confianca']
         hora = horario.strftime('%H:%M')
-        emoji = '🔼 COMPRA' if direcao == 'CALL' else '🔽 VENDA'
         
-        return f"""🔎 Analisando 💱 {ativo}
-💡 Estratégia: TOP VIP BLITZ
+        return f"""🚨SINAL AO VIVO🚨
 
-⏰ Preparar para: {hora}
-⌛ Expiração: 1 M
-Direção: {emoji}
-Confiança: {conf:.0f}%
+✳️ TOP VIP BLITZ ✅
+⏲ EXPIRAÇÃO: M1
 
-Aguarde confirmação..."""
+👉🏼 HORARIO: {hora}
+
+🏳ATIVO: {ativo}-OTC {direcao}
+
+📊 Confiança: {conf:.0f}%
+🧠 Estratégia: TOP VIP
+
+🍀🍀BOA SORTE 🍀 🍀"""
 
     async def monitorar_resultado(self, sinal, horario_entrada):
         ativo = sinal['ativo']
@@ -276,7 +277,7 @@ Aguarde confirmação..."""
     async def executar(self):
         banner()
         print("⚛️ Bot TOP VIP Blitz iniciando...")
-        self.tg.send(f"🔥 *TOP VIP BLITZ ATIVADO*\n⚡ Modo Rápido\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n⏰ Intervalo: 5 min\n🔄 Gale 1")
+        self.tg.send(f"🔥 *TOP VIP BLITZ ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n⏰ Intervalo: 5 min\n🔄 Gale 1")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -307,7 +308,6 @@ Aguarde confirmação..."""
                 if 0 <= tempo_ate_envio <= 15:
                     sinal = self.buscar_sinal()
                     
-                    # ⏰ INTERVALO DE 5 MINUTOS
                     if sinal and time.time() - self.ult_sinal > INTERVALO_MINIMO:
                         if tempo_ate_envio > 0:
                             await asyncio.sleep(tempo_ate_envio)
