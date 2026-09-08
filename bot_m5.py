@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-⚛️ TOP VIP M1 - OTC - 24 HORAS
+⚛️ TOP VIP M1 - OTC - MELHORADA
 📊 12 Pares OTC
 ⏱️ Timeframe: M1
 ⏰ Intervalo: 5 min
-🔄 Gale 1
-💪 Velas (corpo ≥ 30%)
-🛡️ Anti-Pavio Relaxado
-📊 ATR ampliado
-🎯 Confiança mínima: 50%
-⚡ 24/7 (sem filtro de horário)
+🔄 Gale 1 (1.5x)
+💪 Velas Fortes (corpo ≥ 40%)
+🛡️ Anti-Pavio
+📊 ATR
+📈 Filtro de Tendência (SMA20)
+🎯 Confiança mínima: 60%
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -21,20 +21,20 @@ FUSO_BR = timezone(timedelta(hours=-3))
 
 INTERVALO_MINIMO = 300
 USAR_GALE = True
-ANTECEDENCIA = 20
+ANTECEDENCIA = 10
 TIMEFRAME = 60
-CONFIANCA_MINIMA = 50
+CONFIANCA_MINIMA = 60        # Aumentado para filtrar sinais fracos
 
-FORCA_MINIMA = 30
+FORCA_MINIMA = 40            # Corpo ≥ 40%
 ATR_MIN = 0.00003
-ATR_MAX = 0.0050
+ATR_MAX = 0.0040
 
-PAVIO_LIMITE_SUPERIOR = 0.50
-PAVIO_LIMITE_INFERIOR = 0.50
-PAVIO_SOMA_LIMITE = 0.70
+PAVIO_LIMITE_SUPERIOR = 0.40
+PAVIO_LIMITE_INFERIOR = 0.40
+PAVIO_SOMA_LIMITE = 0.60
 
 def banner():
-    print("⚛️ TOP VIP M1 - 24h")
+    print("⚛️ TOP VIP M1 - Melhorada")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -105,8 +105,14 @@ def tem_pavio_excessivo(vela):
     return False
 
 class TopVIP:
+    """
+    TOP VIP M1 Melhorada
+    - Exige 3 velas na mesma direção (sinal forte)
+    - Ou 2 velas + última vela forte (sinal médio)
+    - Filtro de tendência (SMA20)
+    """
     def analisar(self, velas):
-        if len(velas) < 4:
+        if len(velas) < 25:
             return None, 0
         
         ultimas = list(velas)[-3:]
@@ -126,23 +132,32 @@ class TopVIP:
         if tem_pavio_excessivo(vela):
             return None, 0
         
+        # 📈 Filtro de tendência (SMA20)
+        precos = [v['close'] for v in velas]
+        sma20 = sum(precos[-20:]) / 20
+        atual = precos[-1]
+        
         calls = sum(1 for v in ultimas if v['close'] > v['open'])
         puts = 3 - calls
         
-        if calls == 3 and vela['close'] > vela['open']:
-            conf = 60 + forca * 0.2
+        # CALL: 3 velas de alta + tendência de alta
+        if calls == 3 and vela['close'] > vela['open'] and atual > sma20:
+            conf = 65 + forca * 0.2
             return 'CALL', min(conf, 85)
         
-        if puts == 3 and vela['close'] < vela['open']:
-            conf = 60 + forca * 0.2
+        # PUT: 3 velas de baixa + tendência de baixa
+        if puts == 3 and vela['close'] < vela['open'] and atual < sma20:
+            conf = 65 + forca * 0.2
             return 'PUT', min(conf, 85)
         
-        if calls == 2 and vela['close'] > vela['open']:
-            conf = 50 + forca * 0.25
+        # CALL: 2 velas de alta + vela forte + tendência de alta
+        if calls == 2 and vela['close'] > vela['open'] and atual > sma20:
+            conf = 55 + forca * 0.25
             return 'CALL', min(conf, 75)
         
-        if puts == 2 and vela['close'] < vela['open']:
-            conf = 50 + forca * 0.25
+        # PUT: 2 velas de baixa + vela forte + tendência de baixa
+        if puts == 2 and vela['close'] < vela['open'] and atual < sma20:
+            conf = 55 + forca * 0.25
             return 'PUT', min(conf, 75)
         
         return None, 0
@@ -223,7 +238,7 @@ class Bot:
         melhor_score = 0
         
         for par, velas in self.velas.items():
-            if len(velas) < 4:
+            if len(velas) < 25:
                 continue
             
             atr = self.calcular_atr(velas, 14)
@@ -259,6 +274,8 @@ class Bot:
 
 📊 Confiança: {conf:.0f}%
 🧠 Estratégia: TOP VIP
+💪 Vela Forte
+📈 Tendência Alinhada
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -332,8 +349,8 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot TOP VIP M1 24h iniciando...")
-        self.tg.send(f"🔥 *TOP VIP M1 24H*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n⚡ 24/7\n🔄 Gale 1\n🎯 Confiança {CONFIANCA_MINIMA}%+")
+        print("⚛️ Bot TOP VIP M1 melhorado iniciando...")
+        self.tg.send(f"🔥 *TOP VIP M1 MELHORADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Velas Fortes\n📈 Filtro Tendência\n🛡️ Anti-Pavio\n📊 ATR\n🎯 Confiança {CONFIANCA_MINIMA}%+\n🔄 Gale 1")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
