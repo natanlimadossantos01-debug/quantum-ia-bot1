@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM IA M1 - CATÁLOGO INTELIGENTE
-🧠 Testa 6 estratégias e usa a melhor automaticamente
+⚛️ QUANTUM TRIPLE - WIN DIRETO ALTO
+🎯 3 Confluências obrigatórias
 📊 12 Pares OTC
 ⏱️ Timeframe: M1
-🔄 Gale 1
-📈 Reavaliação a cada 10 sinais
+🔄 Gale 1.5x
+💪 Vela FORTE (corpo ≥ 60%)
+📈 Tendência alinhada (SMA20)
+🛡️ Anti-pavio rigoroso
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
-from collections import deque, defaultdict
+from collections import deque
 from pathlib import Path
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
@@ -17,12 +19,21 @@ FUSO_BR = timezone(timedelta(hours=-3))
 
 INTERVALO_MINIMO = 300
 USAR_GALE = True
-ANTECEDENCIA = 30
+MULTIPLICADOR_GALE = 1.5     # 1.5x (mais seguro)
+ANTECEDENCIA = 10
 TIMEFRAME = 60
-CONFIANCA_MINIMA = 50
+CONFIANCA_MINIMA = 75        # Alta
+
+FORCA_MINIMA = 60            # Vela forte
+ATR_MIN = 0.00003
+ATR_MAX = 0.0040
+
+PAVIO_LIMITE_SUPERIOR = 0.35
+PAVIO_LIMITE_INFERIOR = 0.35
+PAVIO_SOMA_LIMITE = 0.55
 
 def banner():
-    print("⚛️ QUANTUM IA M1 - Catálogo Inteligente")
+    print("⚛️ QUANTUM TRIPLE - Win Direto Alto")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -69,162 +80,100 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-# ═══════════════════════════════════════════
-# 6 ESTRATÉGIAS DIFERENTES
-# ═══════════════════════════════════════════
+def tem_pavio_excessivo(vela):
+    corpo = abs(vela['close'] - vela['open'])
+    range_total = vela['high'] - vela['low']
+    
+    if range_total == 0:
+        return True
+    
+    pavio_sup = vela['high'] - max(vela['close'], vela['open'])
+    pavio_inf = min(vela['close'], vela['open']) - vela['low']
+    
+    pct_pavio_sup = pavio_sup / range_total
+    pct_pavio_inf = pavio_inf / range_total
+    pct_pavio_total = (pavio_sup + pavio_inf) / range_total
+    
+    if pct_pavio_sup > PAVIO_LIMITE_SUPERIOR:
+        return True
+    if pct_pavio_inf > PAVIO_LIMITE_INFERIOR:
+        return True
+    if pct_pavio_total > PAVIO_SOMA_LIMITE:
+        return True
+    
+    return False
 
-class TopVIP:
-    """3 velas de alta → CALL | 3 velas de baixa → PUT"""
+class QuantumTriple:
+    """
+    QUANTUM TRIPLE - 3 confluências obrigatórias
+    """
     def analisar(self, velas):
-        if len(velas) < 4:
+        if len(velas) < 25:
             return None, 0
-        ultimas = list(velas)[-3:]
-        calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls == 3:
-            return 'CALL', 70
-        if puts == 3:
-            return 'PUT', 70
-        return None, 0
-
-class MHI:
-    """Minoria das 3 velas"""
-    def analisar(self, velas):
-        if len(velas) < 4:
-            return None, 0
-        ultimas = list(velas)[-3:]
-        calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls == 1:  # Minoria alta
-            return 'CALL', 70
-        if puts == 1:  # Minoria baixa
-            return 'PUT', 70
-        return None, 0
-
-class Reversao:
-    """3 velas de alta → PUT | 3 velas de baixa → CALL"""
-    def analisar(self, velas):
-        if len(velas) < 4:
-            return None, 0
-        ultimas = list(velas)[-3:]
-        calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 3 - calls
-        if calls == 3:
-            return 'PUT', 65
-        if puts == 3:
-            return 'CALL', 65
-        return None, 0
-
-class ForcaExtrema:
-    """Vela com corpo > 70% do range"""
-    def analisar(self, velas):
-        if len(velas) < 2:
-            return None, 0
+        
         vela = velas[-1]
+        ultimas = list(velas)[-3:]
+        
+        # 1️⃣ FILTRO: Vela FORTE (corpo ≥ 60%)
         corpo = abs(vela['close'] - vela['open'])
         range_total = vela['high'] - vela['low']
+        
         if range_total == 0:
             return None, 0
+        
         forca = (corpo / range_total) * 100
-        if forca > 70:
-            if vela['close'] > vela['open']:
-                return 'CALL', 70
-            else:
-                return 'PUT', 70
-        return None, 0
-
-class Sequencia:
-    """4 velas mesma direção → reversão"""
-    def analisar(self, velas):
-        if len(velas) < 5:
+        if forca < FORCA_MINIMA:
             return None, 0
-        ultimas = list(velas)[-4:]
+        
+        # 2️⃣ FILTRO: Anti-pavio
+        if tem_pavio_excessivo(vela):
+            return None, 0
+        
+        # 3️⃣ FILTRO: Tendência alinhada (SMA20)
+        precos = [v['close'] for v in velas]
+        sma20 = sum(precos[-20:]) / 20
+        atual = precos[-1]
+        
         calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 4 - calls
-        if calls == 4:
-            return 'PUT', 65
-        if puts == 4:
-            return 'CALL', 65
+        puts = 3 - calls
+        
+        # CALL: 3 velas altas + tendência alta
+        if calls == 3 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 75 + forca * 0.15
+            return 'CALL', min(conf, 90)
+        
+        # PUT: 3 velas baixas + tendência baixa
+        if puts == 3 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 75 + forca * 0.15
+            return 'PUT', min(conf, 90)
+        
+        # CALL: 2 velas altas + tendência alta + vela forte
+        if calls == 2 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 70 + forca * 0.15
+            return 'CALL', min(conf, 85)
+        
+        # PUT: 2 velas baixas + tendência baixa + vela forte
+        if puts == 2 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 70 + forca * 0.15
+            return 'PUT', min(conf, 85)
+        
+        # CALL: Minoria (MHI) + tendência alta
+        if calls == 1 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 70
+            return 'CALL', conf
+        
+        # PUT: Minoria (MHI) + tendência baixa
+        if puts == 1 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 70
+            return 'PUT', conf
+        
         return None, 0
-
-class VelaConfirmacao:
-    """2 velas mesma direção + última forte"""
-    def analisar(self, velas):
-        if len(velas) < 3:
-            return None, 0
-        v1 = velas[-2]
-        v2 = velas[-1]
-        if v1['close'] > v1['open'] and v2['close'] > v2['open']:
-            corpo = abs(v2['close'] - v2['open'])
-            range_total = v2['high'] - v2['low']
-            if range_total > 0 and (corpo / range_total) > 0.5:
-                return 'CALL', 65
-        if v1['close'] < v1['open'] and v2['close'] < v2['open']:
-            corpo = abs(v2['close'] - v2['open'])
-            range_total = v2['high'] - v2['low']
-            if range_total > 0 and (corpo / range_total) > 0.5:
-                return 'PUT', 65
-        return None, 0
-
-# ═══════════════════════════════════════════
-# CATÁLOGO INTELIGENTE
-# ═══════════════════════════════════════════
-class Catalogo:
-    def __init__(self):
-        self.estrategias = {
-            'TOP VIP': {'wins': 0, 'losses': 0, 'strategy': TopVIP()},
-            'MHI': {'wins': 0, 'losses': 0, 'strategy': MHI()},
-            'Reversão': {'wins': 0, 'losses': 0, 'strategy': Reversao()},
-            'Força Extrema': {'wins': 0, 'losses': 0, 'strategy': ForcaExtrema()},
-            'Sequência': {'wins': 0, 'losses': 0, 'strategy': Sequencia()},
-            'Vela Confirmação': {'wins': 0, 'losses': 0, 'strategy': VelaConfirmacao()}
-        }
-        self.estrategia_atual = 'TOP VIP'
-        self.sinais_desde_troca = 0
-    
-    def registrar(self, nome, ganhou):
-        if nome in self.estrategias:
-            if ganhou:
-                self.estrategias[nome]['wins'] += 1
-            else:
-                self.estrategias[nome]['losses'] += 1
-    
-    def get_taxa(self, nome):
-        if nome in self.estrategias:
-            total = self.estrategias[nome]['wins'] + self.estrategias[nome]['losses']
-            if total > 0:
-                return (self.estrategias[nome]['wins'] / total) * 100
-        return 0
-    
-    def escolher_melhor(self):
-        melhor_nome = None
-        melhor_taxa = 0
-        for nome, dados in self.estrategias.items():
-            total = dados['wins'] + dados['losses']
-            if total >= 3:  # Mínimo 3 operações
-                taxa = (dados['wins'] / total) * 100
-                if taxa > melhor_taxa:
-                    melhor_taxa = taxa
-                    melhor_nome = nome
-        if melhor_nome:
-            self.estrategia_atual = melhor_nome
-        return self.estrategia_atual
-    
-    def relatorio(self):
-        msg = "📊 *CATÁLOGO INTELIGENTE*\n\n"
-        for nome, dados in self.estrategias.items():
-            total = dados['wins'] + dados['losses']
-            if total > 0:
-                taxa = (dados['wins'] / total) * 100
-                msg += f"• {nome}: {taxa:.0f}% ({dados['wins']}W/{dados['losses']}L)\n"
-        msg += f"\n🎯 *Atual:* {self.estrategia_atual}"
-        return msg
 
 class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.catalogo = Catalogo()
+        self.estrategia = QuantumTriple()
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -279,20 +228,35 @@ class Bot:
             except Exception as e:
                 print(f"Erro {nome}: {e}")
 
+    def calcular_atr(self, velas, periodo=14):
+        if len(velas) < periodo + 1:
+            return None
+        trs = []
+        for i in range(-periodo, 0):
+            h = velas[i]['high']
+            l = velas[i]['low']
+            c_prev = velas[i-1]['close'] if i > -periodo else velas[i]['open']
+            tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
+            trs.append(tr)
+        return np.mean(trs)
+
     def buscar_sinal(self):
-        """Usa apenas a estratégia atual do catálogo"""
         melhor = None
         melhor_score = 0
         
-        estrategia = self.catalogo.estrategias[self.catalogo.estrategia_atual]['strategy']
-        
         for par, velas in self.velas.items():
-            if len(velas) < 4:
+            if len(velas) < 25:
                 continue
-            direcao, conf = estrategia.analisar(velas)
-            if direcao and conf > melhor_score:
-                melhor_score = conf
-                melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf, 'estrategia': self.catalogo.estrategia_atual}
+            
+            atr = self.calcular_atr(velas, 14)
+            if atr is None or atr < ATR_MIN or atr > ATR_MAX:
+                continue
+            
+            direcao, conf = self.estrategia.analisar(velas)
+            if direcao and conf >= CONFIANCA_MINIMA:
+                if conf > melhor_score:
+                    melhor_score = conf
+                    melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
         
         return melhor
 
@@ -304,12 +268,11 @@ class Bot:
         ativo = sinal['ativo']
         direcao = sinal['direcao']
         conf = sinal['confianca']
-        est = sinal['estrategia']
         hora = horario.strftime('%H:%M')
         
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM IA M1 ✅
+✳️ QUANTUM TRIPLE ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {hora}
@@ -317,14 +280,14 @@ class Bot:
 🏳ATIVO: {ativo}-OTC {direcao}
 
 📊 Confiança: {conf:.0f}%
-🧠 Estratégia: {est}
+🧠 Estratégia: QUANTUM TRIPLE
+💪 3 Confluências
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
     async def monitorar_resultado(self, sinal, horario_entrada):
         ativo = sinal['ativo']
         direcao = sinal['direcao']
-        estrategia_nome = sinal['estrategia']
         
         agora = datetime.now(FUSO_BR)
         espera = (horario_entrada + timedelta(minutes=1) - agora).total_seconds()
@@ -342,9 +305,6 @@ class Bot:
                 else:
                     ganhou = v['close'] < v['open']
                 break
-        
-        # Registra no catálogo
-        self.catalogo.registrar(estrategia_nome, ganhou)
         
         if ganhou:
             self.placar['w'] += 1
@@ -377,10 +337,6 @@ class Bot:
                 self.placar['l'] += 1
                 resultado = "❌ LOSS"
         
-        # Reavalia catálogo a cada 5 sinais
-        if self.sinais % 5 == 0:
-            self.catalogo.escolher_melhor()
-        
         total = self.placar['w'] + self.placar['g1'] + self.placar['l']
         tx = round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1) if total > 0 else 0.0
         msg = f"""{resultado}
@@ -388,10 +344,6 @@ class Bot:
 📊 Placar: 🟢{self.placar['w']}W 🟡{self.placar['g1']}G1 🔴{self.placar['l']}L
 🎯 Assertividade: {tx}%"""
         self.tg.send(msg)
-        
-        # Envia relatório a cada 10 sinais
-        if self.sinais % 10 == 0:
-            self.tg.send(self.catalogo.relatorio())
 
     def verificar_zeramento_diario(self):
         agora = datetime.now(FUSO_BR)
@@ -403,8 +355,8 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot Catálogo Inteligente iniciando...")
-        self.tg.send(f"🔥 *QUANTUM IA CATÁLOGO*\n🧠 6 Estratégias\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n🔄 Reavaliação automática\n📈 Usa a melhor estratégia")
+        print("⚛️ Bot QUANTUM TRIPLE iniciando...")
+        self.tg.send(f"🔥 *QUANTUM TRIPLE ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Vela Forte 60%\n📈 Tendência SMA20\n🛡️ Anti-Pavio\n🎯 Confiança {CONFIANCA_MINIMA}%+\n🔄 Gale 1.5x")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -419,7 +371,7 @@ class Bot:
                 agora = datetime.now(FUSO_BR)
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
-                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais} | 🧠 {self.catalogo.estrategia_atual}")
+                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
                     
                     if total_velas == 0:
                         print("🔄 Sem velas! Reconectando...")
