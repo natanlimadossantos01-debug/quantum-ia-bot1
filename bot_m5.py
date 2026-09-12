@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM PRO M1 - LÓGICA AVANÇADA
+⚛️ QUANTUM PRO M1 - LÓGICA BALANCEADA
 🧠 Multi-Timeframe (M1 + M5)
 📊 Volatilidade Adaptativa
-🔍 Análise de 5 velas
-⏰ Bloqueio de horários ruins
-💪 Vela Forte + Momentum
+🛡️ Anti-Pavio
+💪 Vela Forte
+🎯 Confiança 65%
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -20,10 +20,10 @@ USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
 ANTECEDENCIA = 10
 TIMEFRAME = 60
-CONFIANCA_MINIMA = 70
+CONFIANCA_MINIMA = 65
 
 def banner():
-    print("⚛️ QUANTUM PRO M1 - Lógica Avançada")
+    print("⚛️ QUANTUM PRO M1 - Balanceado")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -70,32 +70,17 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-# ═══════════════════════════════════════════
-# 🚫 HORÁRIOS RUINS (baseado em experiência)
-# ═══════════════════════════════════════════
 def horario_bom():
-    """
-    Bloqueia horários conhecidos como ruins para OTC
-    - 03:00 às 05:00 (baixa liquidez)
-    - 12:00 às 13:00 (almoço)
-    - 19:00 às 20:00 (transição)
-    """
+    """Bloqueia apenas horários MUITO ruins"""
     agora = datetime.now(FUSO_BR)
     hora = agora.hour
     
-    # Horários ruins
-    if 3 <= hora < 5:
-        return False
-    if 12 <= hora < 13:
-        return False
-    if 19 <= hora < 20:
+    # Bloqueia apenas 03:00 - 04:00 (pior horário)
+    if 3 <= hora < 4:
         return False
     
     return True
 
-# ═══════════════════════════════════════════
-# 📊 ANÁLISE DE VOLATILIDADE ADAPTATIVA
-# ═══════════════════════════════════════════
 def calcular_atr(velas, periodo=14):
     if len(velas) < periodo + 1:
         return 0
@@ -109,26 +94,22 @@ def calcular_atr(velas, periodo=14):
     return np.mean(trs)
 
 def volatilidade_ok(velas):
-    """Volatilidade adaptativa - ajusta conforme o par"""
+    """Volatilidade adaptativa (mais permissiva)"""
     atr = calcular_atr(velas, 14)
     if atr == 0:
         return False
     
-    # Média das últimas 20 velas
     ranges = [v['high'] - v['low'] for v in velas[-20:]]
     range_medio = np.mean(ranges)
     
-    # ATR deve estar entre 0.5x e 2.5x do range médio
-    if atr < range_medio * 0.5:
-        return False  # Muito parado
-    if atr > range_medio * 2.5:
-        return False  # Muito volátil
+    # ATR entre 0.3x e 3x do range médio (mais permissivo)
+    if atr < range_medio * 0.3:
+        return False
+    if atr > range_medio * 3.0:
+        return False
     
     return True
 
-# ═══════════════════════════════════════════
-# 🛡️ ANTI-PAVIO
-# ═══════════════════════════════════════════
 def tem_pavio_excessivo(vela):
     corpo = abs(vela['close'] - vela['open'])
     range_total = vela['high'] - vela['low']
@@ -143,28 +124,26 @@ def tem_pavio_excessivo(vela):
     pct_pavio_inf = pavio_inf / range_total
     pct_pavio_total = (pavio_sup + pavio_inf) / range_total
     
-    if pct_pavio_sup > 0.35:
+    if pct_pavio_sup > 0.45:
         return True
-    if pct_pavio_inf > 0.35:
+    if pct_pavio_inf > 0.45:
         return True
-    if pct_pavio_total > 0.60:
+    if pct_pavio_total > 0.70:
         return True
     
     return False
 
-# ═══════════════════════════════════════════
-# 🔍 ANÁLISE DE 5 VELAS + MOMENTUM
-# ═══════════════════════════════════════════
 class QuantumPro:
     """
-    Lógica Avançada:
-    1. Análise de 5 velas (não 3)
-    2. Confirmação de momentum
-    3. Alinhamento multi-timeframe
-    4. Força da vela atual
+    Lógica Balanceada:
+    1. Anti-pavio
+    2. Vela forte (≥ 40%)
+    3. Volatilidade adaptativa
+    4. Tendência SMA20
+    5. Padrão de 3 velas
     """
     def analisar(self, velas):
-        if len(velas) < 30:
+        if len(velas) < 25:
             return None, 0
         
         vela = velas[-1]
@@ -181,7 +160,7 @@ class QuantumPro:
             return None, 0
         
         forca = (corpo / range_total) * 100
-        if forca < 50:
+        if forca < 40:
             return None, 0
         
         # 📊 FILTRO 3: Volatilidade
@@ -193,43 +172,32 @@ class QuantumPro:
         sma20 = sum(precos[-20:]) / 20
         atual = precos[-1]
         
-        # 🔍 FILTRO 5: Análise de 5 velas
-        ultimas_5 = list(velas)[-5:]
-        calls_5 = sum(1 for v in ultimas_5 if v['close'] > v['open'])
-        puts_5 = 5 - calls_5
-        
-        # 🔍 FILTRO 6: Análise de 3 velas
+        # 🔍 FILTRO 5: Padrão de 3 velas
         ultimas_3 = list(velas)[-3:]
-        calls_3 = sum(1 for v in ultimas_3 if v['close'] > v['open'])
-        puts_3 = 3 - calls_3
+        calls = sum(1 for v in ultimas_3 if v['close'] > v['open'])
+        puts = 3 - calls
         
-        # 📊 FILTRO 7: Momentum (aceleração)
-        momentum = precos[-1] - precos[-3]
-        momentum_anterior = precos[-2] - precos[-4]
-        acelerando_alta = momentum > 0 and momentum > momentum_anterior
-        acelerando_baixa = momentum < 0 and momentum < momentum_anterior
+        # 🎯 SINAIS
         
-        # 🎯 SINAIS FORTES (4+ confluências)
+        # CALL: 3 velas altas + tendência alta + vela forte
+        if calls == 3 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 75 + forca * 0.15
+            return 'CALL', min(conf, 88)
         
-        # CALL muito forte: 4+ velas altas + tendência alta + vela forte + momentum
-        if calls_5 >= 4 and calls_3 >= 3 and atual > sma20 and vela['close'] > vela['open'] and acelerando_alta:
-            conf = 80 + forca * 0.1
-            return 'CALL', min(conf, 90)
+        # PUT: 3 velas baixas + tendência baixa + vela forte
+        if puts == 3 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 75 + forca * 0.15
+            return 'PUT', min(conf, 88)
         
-        # PUT muito forte: 4+ velas baixas + tendência baixa + vela forte + momentum
-        if puts_5 >= 4 and puts_3 >= 3 and atual < sma20 and vela['close'] < vela['open'] and acelerando_baixa:
-            conf = 80 + forca * 0.1
-            return 'PUT', min(conf, 90)
+        # CALL: 2 velas altas + tendência alta + vela forte
+        if calls == 2 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 68 + forca * 0.15
+            return 'CALL', min(conf, 82)
         
-        # CALL forte: 3 velas altas + tendência alta + vela forte
-        if calls_5 >= 3 and calls_3 == 3 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 72 + forca * 0.1
-            return 'CALL', min(conf, 85)
-        
-        # PUT forte: 3 velas baixas + tendência baixa + vela forte
-        if puts_5 >= 3 and puts_3 == 3 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 72 + forca * 0.1
-            return 'PUT', min(conf, 85)
+        # PUT: 2 velas baixas + tendência baixa + vela forte
+        if puts == 2 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 68 + forca * 0.15
+            return 'PUT', min(conf, 82)
         
         return None, 0
 
@@ -237,7 +205,7 @@ class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.velas_m5 = {nome: deque(maxlen=50) for nome in ATIVOS_OTC}  # Multi-timeframe
+        self.velas_m5 = {nome: deque(maxlen=50) for nome in ATIVOS_OTC}
         self.estrategia = QuantumPro()
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
@@ -280,7 +248,7 @@ class Bot:
                     if not api:
                         break
                 
-                # 📊 M1 (principal)
+                # M1
                 c = api.get_candles(ativo_id, TIMEFRAME, 60, time.time())
                 if c and len(c) > 0:
                     self.velas[nome].clear()
@@ -293,11 +261,11 @@ class Bot:
                                 'volume': int(x.get('volume',0))
                             })
                 
-                # 📊 M5 (confirmação)
-                c5 = api.get_candles(ativo_id, 300, 30, time.time())
+                # M5 (apenas para verificação, não bloqueia)
+                c5 = api.get_candles(ativo_id, 300, 20, time.time())
                 if c5 and len(c5) > 0:
                     self.velas_m5[nome].clear()
-                    for x in c5[-30:]:
+                    for x in c5[-20:]:
                         if isinstance(x, dict):
                             self.velas_m5[nome].append({
                                 'time': datetime.fromtimestamp(x.get('from',0), FUSO_BR),
@@ -308,36 +276,16 @@ class Bot:
             except Exception as e:
                 print(f"Erro {nome}: {e}")
 
-    def confirmar_m5(self, par, direcao):
-        """Confirma se o M5 está alinhado com o sinal do M1"""
-        velas_m5 = self.velas_m5[par]
-        if len(velas_m5) < 3:
-            return True  # Sem dados suficientes, aceita
-        
-        # Últimas 3 velas M5
-        ultimas = list(velas_m5)[-3:]
-        calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 3 - calls
-        
-        if direcao == 'CALL':
-            return calls >= 2  # Maioria alta no M5
-        else:
-            return puts >= 2  # Maioria baixa no M5
-
     def buscar_sinal(self):
         melhor = None
         melhor_score = 0
         
         for par, velas in self.velas.items():
-            if len(velas) < 30:
+            if len(velas) < 25:
                 continue
             
             direcao, conf = self.estrategia.analisar(velas)
             if direcao and conf >= CONFIANCA_MINIMA:
-                # 🎯 CONFIRMAÇÃO MULTI-TIMEFRAME
-                if not self.confirmar_m5(par, direcao):
-                    continue  # M5 não confirma, pula
-                
                 if conf > melhor_score:
                     melhor_score = conf
                     melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
@@ -365,7 +313,6 @@ class Bot:
 
 📊 Confiança: {conf:.0f}%
 🧠 Estratégia: QUANTUM PRO
-🎯 Multi-Timeframe ✅
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -440,7 +387,7 @@ class Bot:
     async def executar(self):
         banner()
         print("⚛️ Bot QUANTUM PRO M1 iniciando...")
-        self.tg.send(f"🔥 *QUANTUM PRO M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1 + M5\n🎯 Multi-Timeframe\n📊 Volatilidade Adaptativa\n🛡️ Anti-Pavio\n⏰ Bloqueio de Horários\n🔄 Gale 1.5x")
+        self.tg.send(f"🔥 *QUANTUM PRO M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Vela Forte 40%\n📈 Tendência SMA20\n🛡️ Anti-Pavio\n📊 Volatilidade Adaptativa\n🔄 Gale 1.5x")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -454,10 +401,9 @@ class Bot:
                 
                 agora = datetime.now(FUSO_BR)
                 
-                # ⏰ VERIFICA HORÁRIO
                 if not horario_bom():
                     if agora.second == 0:
-                        print(f"⏰ Horário ruim ({agora.strftime('%H:%M')}). Aguardando...")
+                        print(f"⏰ Horário bloqueado. Aguardando...")
                     await asyncio.sleep(30)
                     continue
                 
