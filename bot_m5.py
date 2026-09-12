@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE - WIN DIRETO ALTO
-🎯 3 Confluências obrigatórias
-📊 12 Pares OTC
-⏱️ Timeframe: M1
-🔄 Gale 1.5x
-💪 Vela FORTE (corpo ≥ 60%)
-📈 Tendência alinhada (SMA20)
-🛡️ Anti-pavio rigoroso
+⚛️ QUANTUM PRO M1 - LÓGICA AVANÇADA
+🧠 Multi-Timeframe (M1 + M5)
+📊 Volatilidade Adaptativa
+🔍 Análise de 5 velas
+⏰ Bloqueio de horários ruins
+💪 Vela Forte + Momentum
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
@@ -19,21 +17,13 @@ FUSO_BR = timezone(timedelta(hours=-3))
 
 INTERVALO_MINIMO = 300
 USAR_GALE = True
-MULTIPLICADOR_GALE = 1.5     # 1.5x (mais seguro)
+MULTIPLICADOR_GALE = 1.5
 ANTECEDENCIA = 10
 TIMEFRAME = 60
-CONFIANCA_MINIMA = 75        # Alta
-
-FORCA_MINIMA = 60            # Vela forte
-ATR_MIN = 0.00003
-ATR_MAX = 0.0040
-
-PAVIO_LIMITE_SUPERIOR = 0.35
-PAVIO_LIMITE_INFERIOR = 0.35
-PAVIO_SOMA_LIMITE = 0.55
+CONFIANCA_MINIMA = 70
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE - Win Direto Alto")
+    print("⚛️ QUANTUM PRO M1 - Lógica Avançada")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -80,6 +70,65 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
+# ═══════════════════════════════════════════
+# 🚫 HORÁRIOS RUINS (baseado em experiência)
+# ═══════════════════════════════════════════
+def horario_bom():
+    """
+    Bloqueia horários conhecidos como ruins para OTC
+    - 03:00 às 05:00 (baixa liquidez)
+    - 12:00 às 13:00 (almoço)
+    - 19:00 às 20:00 (transição)
+    """
+    agora = datetime.now(FUSO_BR)
+    hora = agora.hour
+    
+    # Horários ruins
+    if 3 <= hora < 5:
+        return False
+    if 12 <= hora < 13:
+        return False
+    if 19 <= hora < 20:
+        return False
+    
+    return True
+
+# ═══════════════════════════════════════════
+# 📊 ANÁLISE DE VOLATILIDADE ADAPTATIVA
+# ═══════════════════════════════════════════
+def calcular_atr(velas, periodo=14):
+    if len(velas) < periodo + 1:
+        return 0
+    trs = []
+    for i in range(-periodo, 0):
+        h = velas[i]['high']
+        l = velas[i]['low']
+        c_prev = velas[i-1]['close'] if i > -periodo else velas[i]['open']
+        tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
+        trs.append(tr)
+    return np.mean(trs)
+
+def volatilidade_ok(velas):
+    """Volatilidade adaptativa - ajusta conforme o par"""
+    atr = calcular_atr(velas, 14)
+    if atr == 0:
+        return False
+    
+    # Média das últimas 20 velas
+    ranges = [v['high'] - v['low'] for v in velas[-20:]]
+    range_medio = np.mean(ranges)
+    
+    # ATR deve estar entre 0.5x e 2.5x do range médio
+    if atr < range_medio * 0.5:
+        return False  # Muito parado
+    if atr > range_medio * 2.5:
+        return False  # Muito volátil
+    
+    return True
+
+# ═══════════════════════════════════════════
+# 🛡️ ANTI-PAVIO
+# ═══════════════════════════════════════════
 def tem_pavio_excessivo(vela):
     corpo = abs(vela['close'] - vela['open'])
     range_total = vela['high'] - vela['low']
@@ -94,27 +143,37 @@ def tem_pavio_excessivo(vela):
     pct_pavio_inf = pavio_inf / range_total
     pct_pavio_total = (pavio_sup + pavio_inf) / range_total
     
-    if pct_pavio_sup > PAVIO_LIMITE_SUPERIOR:
+    if pct_pavio_sup > 0.35:
         return True
-    if pct_pavio_inf > PAVIO_LIMITE_INFERIOR:
+    if pct_pavio_inf > 0.35:
         return True
-    if pct_pavio_total > PAVIO_SOMA_LIMITE:
+    if pct_pavio_total > 0.60:
         return True
     
     return False
 
-class QuantumTriple:
+# ═══════════════════════════════════════════
+# 🔍 ANÁLISE DE 5 VELAS + MOMENTUM
+# ═══════════════════════════════════════════
+class QuantumPro:
     """
-    QUANTUM TRIPLE - 3 confluências obrigatórias
+    Lógica Avançada:
+    1. Análise de 5 velas (não 3)
+    2. Confirmação de momentum
+    3. Alinhamento multi-timeframe
+    4. Força da vela atual
     """
     def analisar(self, velas):
-        if len(velas) < 25:
+        if len(velas) < 30:
             return None, 0
         
         vela = velas[-1]
-        ultimas = list(velas)[-3:]
         
-        # 1️⃣ FILTRO: Vela FORTE (corpo ≥ 60%)
+        # 🛡️ FILTRO 1: Anti-pavio
+        if tem_pavio_excessivo(vela):
+            return None, 0
+        
+        # 💪 FILTRO 2: Vela forte
         corpo = abs(vela['close'] - vela['open'])
         range_total = vela['high'] - vela['low']
         
@@ -122,50 +181,55 @@ class QuantumTriple:
             return None, 0
         
         forca = (corpo / range_total) * 100
-        if forca < FORCA_MINIMA:
+        if forca < 50:
             return None, 0
         
-        # 2️⃣ FILTRO: Anti-pavio
-        if tem_pavio_excessivo(vela):
+        # 📊 FILTRO 3: Volatilidade
+        if not volatilidade_ok(velas):
             return None, 0
         
-        # 3️⃣ FILTRO: Tendência alinhada (SMA20)
+        # 📈 FILTRO 4: Tendência (SMA20)
         precos = [v['close'] for v in velas]
         sma20 = sum(precos[-20:]) / 20
         atual = precos[-1]
         
-        calls = sum(1 for v in ultimas if v['close'] > v['open'])
-        puts = 3 - calls
+        # 🔍 FILTRO 5: Análise de 5 velas
+        ultimas_5 = list(velas)[-5:]
+        calls_5 = sum(1 for v in ultimas_5 if v['close'] > v['open'])
+        puts_5 = 5 - calls_5
         
-        # CALL: 3 velas altas + tendência alta
-        if calls == 3 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 75 + forca * 0.15
+        # 🔍 FILTRO 6: Análise de 3 velas
+        ultimas_3 = list(velas)[-3:]
+        calls_3 = sum(1 for v in ultimas_3 if v['close'] > v['open'])
+        puts_3 = 3 - calls_3
+        
+        # 📊 FILTRO 7: Momentum (aceleração)
+        momentum = precos[-1] - precos[-3]
+        momentum_anterior = precos[-2] - precos[-4]
+        acelerando_alta = momentum > 0 and momentum > momentum_anterior
+        acelerando_baixa = momentum < 0 and momentum < momentum_anterior
+        
+        # 🎯 SINAIS FORTES (4+ confluências)
+        
+        # CALL muito forte: 4+ velas altas + tendência alta + vela forte + momentum
+        if calls_5 >= 4 and calls_3 >= 3 and atual > sma20 and vela['close'] > vela['open'] and acelerando_alta:
+            conf = 80 + forca * 0.1
             return 'CALL', min(conf, 90)
         
-        # PUT: 3 velas baixas + tendência baixa
-        if puts == 3 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 75 + forca * 0.15
+        # PUT muito forte: 4+ velas baixas + tendência baixa + vela forte + momentum
+        if puts_5 >= 4 and puts_3 >= 3 and atual < sma20 and vela['close'] < vela['open'] and acelerando_baixa:
+            conf = 80 + forca * 0.1
             return 'PUT', min(conf, 90)
         
-        # CALL: 2 velas altas + tendência alta + vela forte
-        if calls == 2 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 70 + forca * 0.15
+        # CALL forte: 3 velas altas + tendência alta + vela forte
+        if calls_5 >= 3 and calls_3 == 3 and atual > sma20 and vela['close'] > vela['open']:
+            conf = 72 + forca * 0.1
             return 'CALL', min(conf, 85)
         
-        # PUT: 2 velas baixas + tendência baixa + vela forte
-        if puts == 2 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 70 + forca * 0.15
+        # PUT forte: 3 velas baixas + tendência baixa + vela forte
+        if puts_5 >= 3 and puts_3 == 3 and atual < sma20 and vela['close'] < vela['open']:
+            conf = 72 + forca * 0.1
             return 'PUT', min(conf, 85)
-        
-        # CALL: Minoria (MHI) + tendência alta
-        if calls == 1 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 70
-            return 'CALL', conf
-        
-        # PUT: Minoria (MHI) + tendência baixa
-        if puts == 1 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 70
-            return 'PUT', conf
         
         return None, 0
 
@@ -173,7 +237,8 @@ class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.estrategia = QuantumTriple()
+        self.velas_m5 = {nome: deque(maxlen=50) for nome in ATIVOS_OTC}  # Multi-timeframe
+        self.estrategia = QuantumPro()
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -214,6 +279,8 @@ class Bot:
                     api = await self.reconectar_se_necessario()
                     if not api:
                         break
+                
+                # 📊 M1 (principal)
                 c = api.get_candles(ativo_id, TIMEFRAME, 60, time.time())
                 if c and len(c) > 0:
                     self.velas[nome].clear()
@@ -225,35 +292,52 @@ class Bot:
                                 'low': float(x['min']), 'close': float(x['close']),
                                 'volume': int(x.get('volume',0))
                             })
+                
+                # 📊 M5 (confirmação)
+                c5 = api.get_candles(ativo_id, 300, 30, time.time())
+                if c5 and len(c5) > 0:
+                    self.velas_m5[nome].clear()
+                    for x in c5[-30:]:
+                        if isinstance(x, dict):
+                            self.velas_m5[nome].append({
+                                'time': datetime.fromtimestamp(x.get('from',0), FUSO_BR),
+                                'open': float(x['open']), 'high': float(x['max']),
+                                'low': float(x['min']), 'close': float(x['close']),
+                                'volume': int(x.get('volume',0))
+                            })
             except Exception as e:
                 print(f"Erro {nome}: {e}")
 
-    def calcular_atr(self, velas, periodo=14):
-        if len(velas) < periodo + 1:
-            return None
-        trs = []
-        for i in range(-periodo, 0):
-            h = velas[i]['high']
-            l = velas[i]['low']
-            c_prev = velas[i-1]['close'] if i > -periodo else velas[i]['open']
-            tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
-            trs.append(tr)
-        return np.mean(trs)
+    def confirmar_m5(self, par, direcao):
+        """Confirma se o M5 está alinhado com o sinal do M1"""
+        velas_m5 = self.velas_m5[par]
+        if len(velas_m5) < 3:
+            return True  # Sem dados suficientes, aceita
+        
+        # Últimas 3 velas M5
+        ultimas = list(velas_m5)[-3:]
+        calls = sum(1 for v in ultimas if v['close'] > v['open'])
+        puts = 3 - calls
+        
+        if direcao == 'CALL':
+            return calls >= 2  # Maioria alta no M5
+        else:
+            return puts >= 2  # Maioria baixa no M5
 
     def buscar_sinal(self):
         melhor = None
         melhor_score = 0
         
         for par, velas in self.velas.items():
-            if len(velas) < 25:
-                continue
-            
-            atr = self.calcular_atr(velas, 14)
-            if atr is None or atr < ATR_MIN or atr > ATR_MAX:
+            if len(velas) < 30:
                 continue
             
             direcao, conf = self.estrategia.analisar(velas)
             if direcao and conf >= CONFIANCA_MINIMA:
+                # 🎯 CONFIRMAÇÃO MULTI-TIMEFRAME
+                if not self.confirmar_m5(par, direcao):
+                    continue  # M5 não confirma, pula
+                
                 if conf > melhor_score:
                     melhor_score = conf
                     melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
@@ -272,7 +356,7 @@ class Bot:
         
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE ✅
+✳️ QUANTUM PRO M1 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {hora}
@@ -280,8 +364,8 @@ class Bot:
 🏳ATIVO: {ativo}-OTC {direcao}
 
 📊 Confiança: {conf:.0f}%
-🧠 Estratégia: QUANTUM TRIPLE
-💪 3 Confluências
+🧠 Estratégia: QUANTUM PRO
+🎯 Multi-Timeframe ✅
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -355,8 +439,8 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE iniciando...")
-        self.tg.send(f"🔥 *QUANTUM TRIPLE ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Vela Forte 60%\n📈 Tendência SMA20\n🛡️ Anti-Pavio\n🎯 Confiança {CONFIANCA_MINIMA}%+\n🔄 Gale 1.5x")
+        print("⚛️ Bot QUANTUM PRO M1 iniciando...")
+        self.tg.send(f"🔥 *QUANTUM PRO M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1 + M5\n🎯 Multi-Timeframe\n📊 Volatilidade Adaptativa\n🛡️ Anti-Pavio\n⏰ Bloqueio de Horários\n🔄 Gale 1.5x")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -369,9 +453,17 @@ class Bot:
                 self.verificar_zeramento_diario()
                 
                 agora = datetime.now(FUSO_BR)
+                
+                # ⏰ VERIFICA HORÁRIO
+                if not horario_bom():
+                    if agora.second == 0:
+                        print(f"⏰ Horário ruim ({agora.strftime('%H:%M')}). Aguardando...")
+                    await asyncio.sleep(30)
+                    continue
+                
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
-                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
+                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas M1: {total_velas} | Sinais: {self.sinais}")
                     
                     if total_velas == 0:
                         print("🔄 Sem velas! Reconectando...")
