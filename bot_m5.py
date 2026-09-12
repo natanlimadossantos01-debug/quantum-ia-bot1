@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM PRO M1 - LÓGICA BALANCEADA
-🧠 Multi-Timeframe (M1 + M5)
-📊 Volatilidade Adaptativa
-🛡️ Anti-Pavio
-💪 Vela Forte
-🎯 Confiança 65%
+⚛️ QUANTUM IA M1 - ESTRATÉGIAS QUADRANTES + BACKTEST + IA
+📊 12 Pares OTC
+⏱️ M1
+🎯 MHI, 2-3, 3 Vizinhos, VITUXO
+🧠 Backtest robusto de 30 velas
+🔍 IA escolhe o melhor par por estratégia
+🔄 Gale 1.5x
 """
 import asyncio, time, requests, numpy as np, signal, sys, json, os
 from datetime import datetime, timedelta, timezone
-from collections import deque
+from collections import deque, defaultdict
 from pathlib import Path
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
@@ -23,7 +24,7 @@ TIMEFRAME = 60
 CONFIANCA_MINIMA = 65
 
 def banner():
-    print("⚛️ QUANTUM PRO M1 - Balanceado")
+    print("⚛️ QUANTUM IA M1 - Quadrantes + IA")
 
 def carregar_config():
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -70,143 +71,190 @@ class Telegram:
         try: requests.post(f"{self.url}/sendMessage", json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"}, timeout=10)
         except: pass
 
-def horario_bom():
-    """Bloqueia apenas horários MUITO ruins"""
-    agora = datetime.now(FUSO_BR)
-    hora = agora.hour
-    
-    # Bloqueia apenas 03:00 - 04:00 (pior horário)
-    if 3 <= hora < 4:
-        return False
-    
-    return True
+# ═══════════════════════════════════════════
+# 🕯️ 4 ESTRATÉGIAS DE QUADRANTE
+# ═══════════════════════════════════════════
 
-def calcular_atr(velas, periodo=14):
-    if len(velas) < periodo + 1:
-        return 0
-    trs = []
-    for i in range(-periodo, 0):
-        h = velas[i]['high']
-        l = velas[i]['low']
-        c_prev = velas[i-1]['close'] if i > -periodo else velas[i]['open']
-        tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
-        trs.append(tr)
-    return np.mean(trs)
-
-def volatilidade_ok(velas):
-    """Volatilidade adaptativa (mais permissiva)"""
-    atr = calcular_atr(velas, 14)
-    if atr == 0:
-        return False
-    
-    ranges = [v['high'] - v['low'] for v in velas[-20:]]
-    range_medio = np.mean(ranges)
-    
-    # ATR entre 0.3x e 3x do range médio (mais permissivo)
-    if atr < range_medio * 0.3:
-        return False
-    if atr > range_medio * 3.0:
-        return False
-    
-    return True
-
-def tem_pavio_excessivo(vela):
-    corpo = abs(vela['close'] - vela['open'])
-    range_total = vela['high'] - vela['low']
-    
-    if range_total == 0:
-        return True
-    
-    pavio_sup = vela['high'] - max(vela['close'], vela['open'])
-    pavio_inf = min(vela['close'], vela['open']) - vela['low']
-    
-    pct_pavio_sup = pavio_sup / range_total
-    pct_pavio_inf = pavio_inf / range_total
-    pct_pavio_total = (pavio_sup + pavio_inf) / range_total
-    
-    if pct_pavio_sup > 0.45:
-        return True
-    if pct_pavio_inf > 0.45:
-        return True
-    if pct_pavio_total > 0.70:
-        return True
-    
-    return False
-
-class QuantumPro:
-    """
-    Lógica Balanceada:
-    1. Anti-pavio
-    2. Vela forte (≥ 40%)
-    3. Volatilidade adaptativa
-    4. Tendência SMA20
-    5. Padrão de 3 velas
-    """
+class MHI:
+    """MHI: minoria das 3 últimas velas"""
     def analisar(self, velas):
-        if len(velas) < 25:
+        if len(velas) < 10:
             return None, 0
         
-        vela = velas[-1]
-        
-        # 🛡️ FILTRO 1: Anti-pavio
-        if tem_pavio_excessivo(vela):
-            return None, 0
-        
-        # 💪 FILTRO 2: Vela forte
-        corpo = abs(vela['close'] - vela['open'])
-        range_total = vela['high'] - vela['low']
-        
-        if range_total == 0:
-            return None, 0
-        
-        forca = (corpo / range_total) * 100
-        if forca < 40:
-            return None, 0
-        
-        # 📊 FILTRO 3: Volatilidade
-        if not volatilidade_ok(velas):
-            return None, 0
-        
-        # 📈 FILTRO 4: Tendência (SMA20)
-        precos = [v['close'] for v in velas]
-        sma20 = sum(precos[-20:]) / 20
-        atual = precos[-1]
-        
-        # 🔍 FILTRO 5: Padrão de 3 velas
-        ultimas_3 = list(velas)[-3:]
-        calls = sum(1 for v in ultimas_3 if v['close'] > v['open'])
+        ultimas = list(velas)[-3:]
+        calls = sum(1 for v in ultimas if v['close'] > v['open'])
         puts = 3 - calls
         
-        # 🎯 SINAIS
-        
-        # CALL: 3 velas altas + tendência alta + vela forte
-        if calls == 3 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 75 + forca * 0.15
-            return 'CALL', min(conf, 88)
-        
-        # PUT: 3 velas baixas + tendência baixa + vela forte
-        if puts == 3 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 75 + forca * 0.15
-            return 'PUT', min(conf, 88)
-        
-        # CALL: 2 velas altas + tendência alta + vela forte
-        if calls == 2 and atual > sma20 and vela['close'] > vela['open']:
-            conf = 68 + forca * 0.15
-            return 'CALL', min(conf, 82)
-        
-        # PUT: 2 velas baixas + tendência baixa + vela forte
-        if puts == 2 and atual < sma20 and vela['close'] < vela['open']:
-            conf = 68 + forca * 0.15
-            return 'PUT', min(conf, 82)
-        
+        if calls == 1:
+            return 'CALL', 72
+        if puts == 1:
+            return 'PUT', 72
         return None, 0
 
+class Padrao23:
+    """2-3: vela -2 e -3 definem direção"""
+    def analisar(self, velas):
+        if len(velas) < 5:
+            return None, 0
+        
+        vela_2 = velas[-3]
+        vela_3 = velas[-4]
+        
+        # Ambas de alta
+        if vela_2['close'] > vela_2['open'] and vela_3['close'] > vela_3['open']:
+            return 'CALL', 70
+        # Ambas de baixa
+        if vela_2['close'] < vela_2['open'] and vela_3['close'] < vela_3['open']:
+            return 'PUT', 70
+        return None, 0
+
+class TresVizinhos:
+    """3 Vizinhos: cor da vela -2"""
+    def analisar(self, velas):
+        if len(velas) < 5:
+            return None, 0
+        
+        vela = velas[-2]
+        if vela['close'] > vela['open']:
+            return 'CALL', 70
+        if vela['close'] < vela['open']:
+            return 'PUT', 70
+        return None, 0
+
+class Vituxo:
+    """VITUXO 2.0: maioria das 3 primeiras velas do quadrante anterior"""
+    def analisar(self, velas):
+        if len(velas) < 8:
+            return None, 0
+        
+        velas_ant = list(velas)[-8:-5]
+        calls = sum(1 for v in velas_ant if v['close'] > v['open'])
+        puts = 3 - calls
+        
+        if calls > puts:
+            return 'CALL', 70
+        if puts > calls:
+            return 'PUT', 70
+        return None, 0
+
+# ═══════════════════════════════════════════
+# 🧪 BACKTEST ROBUSTO
+# ═══════════════════════════════════════════
+class Backtest:
+    def __init__(self):
+        self.velas_teste = 30  # Testa nas últimas 30 velas
+    
+    def rodar(self, velas, estrategia):
+        """
+        Roda backtest da estratégia nas últimas N velas
+        Retorna: (wins, losses, taxa_acerto)
+        """
+        wins = 0
+        losses = 0
+        
+        if len(velas) < self.velas_teste + 5:
+            return 0, 0, 0
+        
+        # Testa nas últimas N velas
+        for i in range(len(velas) - self.velas_teste, len(velas) - 1):
+            velas_parciais = list(velas)[:i+1]
+            
+            if len(velas_parciais) < 5:
+                continue
+            
+            # Sinal da estratégia
+            resultado = estrategia.analisar(velas_parciais)
+            if not resultado:
+                continue
+            
+            direcao, _ = resultado
+            vela_entrada = velas[i+1]
+            
+            # Verifica se acertou
+            if direcao == 'CALL':
+                if vela_entrada['close'] > vela_entrada['open']:
+                    wins += 1
+                else:
+                    losses += 1
+            else:
+                if vela_entrada['close'] < vela_entrada['open']:
+                    wins += 1
+                else:
+                    losses += 1
+        
+        total = wins + losses
+        taxa = (wins / total * 100) if total > 0 else 0
+        
+        return wins, losses, taxa
+
+# ═══════════════════════════════════════════
+# 🧠 IA - ESCOLHE MELHOR PAR POR ESTRATÉGIA
+# ═══════════════════════════════════════════
+class IA:
+    def __init__(self):
+        self.melhores_pares = {}  # {estrategia: par}
+        self.ultima_avaliacao = 0
+        self.intervalo_avaliacao = 600  # 10 min
+    
+    def avaliar(self, velas_dict, estrategias, backtest):
+        """
+        Avalia todas as combinações e escolhe o melhor par para cada estratégia
+        """
+        agora = time.time()
+        if agora - self.ultima_avaliacao < self.intervalo_avaliacao:
+            return self.melhores_pares
+        
+        self.ultima_avaliacao = agora
+        
+        print("\n🧠 IA: Avaliando melhor par por estratégia...")
+        
+        for nome_est, est in estrategias:
+            melhor_par = None
+            melhor_taxa = 0
+            
+            for par, velas in velas_dict.items():
+                if len(velas) < 40:
+                    continue
+                
+                wins, losses, taxa = backtest.rodar(velas, est)
+                
+                if taxa > melhor_taxa and (wins + losses) >= 5:
+                    melhor_taxa = taxa
+                    melhor_par = par
+            
+            if melhor_par:
+                self.melhores_pares[nome_est] = {'par': melhor_par, 'taxa': melhor_taxa}
+                print(f"   ✅ {nome_est}: {melhor_par} ({melhor_taxa:.0f}%)")
+            else:
+                print(f"   ❌ {nome_est}: sem dados suficientes")
+        
+        return self.melhores_pares
+    
+    def get_par(self, estrategia):
+        info = self.melhores_pares.get(estrategia)
+        if info:
+            return info['par'], info['taxa']
+        return None, 0
+
+# ═══════════════════════════════════════════
+# BOT
+# ═══════════════════════════════════════════
 class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
-        self.velas_m5 = {nome: deque(maxlen=50) for nome in ATIVOS_OTC}
-        self.estrategia = QuantumPro()
+        
+        # 4 Estratégias
+        self.estrategias = [
+            ('📊 MHI', MHI()),
+            ('📊 2-3', Padrao23()),
+            ('📊 3 Vizinhos', TresVizinhos()),
+            ('📊 VITUXO', Vituxo())
+        ]
+        
+        self.backtest = Backtest()
+        self.ia = IA()
+        
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -247,8 +295,6 @@ class Bot:
                     api = await self.reconectar_se_necessario()
                     if not api:
                         break
-                
-                # M1
                 c = api.get_candles(ativo_id, TIMEFRAME, 60, time.time())
                 if c and len(c) > 0:
                     self.velas[nome].clear()
@@ -260,37 +306,56 @@ class Bot:
                                 'low': float(x['min']), 'close': float(x['close']),
                                 'volume': int(x.get('volume',0))
                             })
-                
-                # M5 (apenas para verificação, não bloqueia)
-                c5 = api.get_candles(ativo_id, 300, 20, time.time())
-                if c5 and len(c5) > 0:
-                    self.velas_m5[nome].clear()
-                    for x in c5[-20:]:
-                        if isinstance(x, dict):
-                            self.velas_m5[nome].append({
-                                'time': datetime.fromtimestamp(x.get('from',0), FUSO_BR),
-                                'open': float(x['open']), 'high': float(x['max']),
-                                'low': float(x['min']), 'close': float(x['close']),
-                                'volume': int(x.get('volume',0))
-                            })
             except Exception as e:
                 print(f"Erro {nome}: {e}")
 
     def buscar_sinal(self):
-        melhor = None
+        """
+        IA escolhe o melhor par para cada estratégia
+        Só envia sinal se a estratégia estiver no seu melhor par
+        """
+        # IA avalia melhor par por estratégia
+        self.ia.avaliar(self.velas, self.estrategias, self.backtest)
+        
+        melhor_sinal = None
         melhor_score = 0
         
-        for par, velas in self.velas.items():
-            if len(velas) < 25:
+        for nome_est, est in self.estrategias:
+            # IA diz qual o melhor par para essa estratégia
+            melhor_par, taxa_bt = self.ia.get_par(nome_est)
+            
+            if not melhor_par or taxa_bt < 65:
+                continue  # Pula se taxa do backtest for baixa
+            
+            if melhor_par not in self.velas:
                 continue
             
-            direcao, conf = self.estrategia.analisar(velas)
-            if direcao and conf >= CONFIANCA_MINIMA:
-                if conf > melhor_score:
-                    melhor_score = conf
-                    melhor = {'ativo': par, 'direcao': direcao, 'confianca': conf}
+            velas = self.velas[melhor_par]
+            if len(velas) < 30:
+                continue
+            
+            # Verifica se a estratégia dá sinal AGORA nesse par
+            resultado = est.analisar(velas)
+            if not resultado:
+                continue
+            
+            direcao, conf = resultado
+            
+            if conf >= CONFIANCA_MINIMA:
+                # Score baseado na taxa do backtest
+                score = taxa_bt + conf * 0.3
+                
+                if score > melhor_score:
+                    melhor_score = score
+                    melhor_sinal = {
+                        'ativo': melhor_par,
+                        'direcao': direcao,
+                        'confianca': conf,
+                        'estrategia': nome_est,
+                        'taxa_bt': taxa_bt
+                    }
         
-        return melhor
+        return melhor_sinal
 
     def calcular_horario_entrada(self):
         agora = datetime.now(FUSO_BR)
@@ -300,11 +365,13 @@ class Bot:
         ativo = sinal['ativo']
         direcao = sinal['direcao']
         conf = sinal['confianca']
+        est = sinal['estrategia']
+        taxa_bt = sinal.get('taxa_bt', 0)
         hora = horario.strftime('%H:%M')
         
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM PRO M1 ✅
+✳️ QUANTUM IA M1 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {hora}
@@ -312,7 +379,8 @@ class Bot:
 🏳ATIVO: {ativo}-OTC {direcao}
 
 📊 Confiança: {conf:.0f}%
-🧠 Estratégia: QUANTUM PRO
+🧠 Estratégia: {est}
+🔬 Backtest: {taxa_bt:.0f}% ✅
 
 🍀🍀BOA SORTE 🍀 🍀"""
 
@@ -386,8 +454,14 @@ class Bot:
 
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM PRO M1 iniciando...")
-        self.tg.send(f"🔥 *QUANTUM PRO M1 ATIVADO*\n📊 {len(ATIVOS_OTC)} Pares OTC\n⏱️ M1\n💪 Vela Forte 40%\n📈 Tendência SMA20\n🛡️ Anti-Pavio\n📊 Volatilidade Adaptativa\n🔄 Gale 1.5x")
+        print("⚛️ Bot QUANTUM IA M1 iniciando...")
+        self.tg.send(f"""🔥 *QUANTUM IA M1 ATIVADO*
+📊 {len(ATIVOS_OTC)} Pares OTC
+⏱️ M1
+🧠 4 Estratégias: MHI, 2-3, 3 Vizinhos, VITUXO
+🔬 Backtest robusto (30 velas)
+🤖 IA escolhe o melhor par por estratégia
+🔄 Gale 1.5x""")
         
         if not self.conectar_iq():
             print("❌ Falha conexão!")
@@ -400,16 +474,9 @@ class Bot:
                 self.verificar_zeramento_diario()
                 
                 agora = datetime.now(FUSO_BR)
-                
-                if not horario_bom():
-                    if agora.second == 0:
-                        print(f"⏰ Horário bloqueado. Aguardando...")
-                    await asyncio.sleep(30)
-                    continue
-                
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
-                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas M1: {total_velas} | Sinais: {self.sinais}")
+                    print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
                     
                     if total_velas == 0:
                         print("🔄 Sem velas! Reconectando...")
@@ -433,6 +500,7 @@ class Bot:
                         self.sinais += 1
                         msg = self.formatar_sinal(sinal, horario_entrada)
                         self.tg.send(msg)
+                        print(f"✅ Sinal: {sinal['ativo']} | {sinal['estrategia']} | BT: {sinal['taxa_bt']:.0f}%")
                         asyncio.create_task(self.monitorar_resultado(sinal, horario_entrada))
                 
                 await asyncio.sleep(1)
