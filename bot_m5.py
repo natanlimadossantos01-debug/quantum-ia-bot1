@@ -3,7 +3,7 @@
 ⚛️ QUANTUM TRIPLE M1 - MULTI-CONFLUÊNCIA
 🎯 4 Confluências: EMA9/EMA21, RSI, Força do Candle, Rompimento
 💪 Mínimo 3 confirmações
-📊 12 Pares OTC
+📊 6 Pares OTC + 6 Pares Mercado Aberto (SOMENTE MOEDAS)
 ⏱️ M1
 🔄 Gale 1.5x
 """
@@ -47,19 +47,28 @@ SENHA = cfg['senha']
 
 from iqoptionapi.stable_api import IQ_Option
 
+# ═══════════════════════════════════════════
+# 📊 ATIVOS - SOMENTE MOEDAS (OTC + MERCADO ABERTO)
+# ═══════════════════════════════════════════
+
+# 6 Pares OTC (apenas forex)
 ATIVOS_OTC = {
-    "EURUSD": "EURUSD-OTC",
-    "GBPUSD": "GBPUSD-OTC",
-    "EURJPY": "EURJPY-OTC",
-    "USDJPY": "USDJPY-OTC",
-    "AUDUSD": "AUDUSD-OTC",
-    "EURGBP": "EURGBP-OTC",
-    "USDCHF": "USDCHF-OTC",
-    "USDCAD": "USDCAD-OTC",
-    "NZDUSD": "NZDUSD-OTC",
-    "AUDCAD": "AUDCAD-OTC",
-    "GBPJPY": "GBPJPY-OTC",
-    "EURAUD": "EURAUD-OTC"
+    "EURUSD-OTC": "EURUSD-OTC",
+    "GBPUSD-OTC": "GBPUSD-OTC",
+    "USDJPY-OTC": "USDJPY-OTC",
+    "AUDUSD-OTC": "AUDUSD-OTC",
+    "USDCAD-OTC": "USDCAD-OTC",
+    "EURGBP-OTC": "EURGBP-OTC"
+}
+
+# 6 Pares de Mercado Aberto (apenas forex)
+ATIVOS_MERCADO = {
+    "EURUSD": "EURUSD",
+    "GBPUSD": "GBPUSD",
+    "USDJPY": "USDJPY",
+    "AUDUSD": "AUDUSD",
+    "USDCAD": "USDCAD",
+    "EURGBP": "EURGBP"
 }
 
 class Telegram:
@@ -223,7 +232,9 @@ def quantum_triple(velas):
 class Bot:
     def __init__(self):
         self.tg = Telegram(TOKEN, CHAT)
+        # Inicializa velas para OTC e Mercado Aberto
         self.velas = {nome: deque(maxlen=100) for nome in ATIVOS_OTC}
+        self.velas.update({nome: deque(maxlen=100) for nome in ATIVOS_MERCADO})
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0}
         self.ult_sinal = 0
@@ -258,7 +269,11 @@ class Bot:
         api = await self.reconectar_se_necessario()
         if not api:
             return
-        for nome, ativo_id in ATIVOS_OTC.items():
+        
+        # Combina todos os ativos para atualização
+        todos_ativos = {**ATIVOS_OTC, **ATIVOS_MERCADO}
+        
+        for nome, ativo_id in todos_ativos.items():
             try:
                 if not api.check_connect():
                     api = await self.reconectar_se_necessario()
@@ -275,13 +290,15 @@ class Bot:
                                 'low': float(x['min']), 'close': float(x['close']),
                                 'volume': int(x.get('volume',0))
                             })
-            except Exception as e:
-                print(f"Erro {nome}: {e}")
+            except Exception:
+                # Ignora silenciosamente ativos indisponíveis (ex: OTC fora do horário)
+                continue
 
     def buscar_sinal(self):
         """
         Busca sinais usando a função quantum_triple
         Escolhe o sinal com maior número de confluências
+        Analisa OTC + Mercado Aberto simultaneamente
         """
         melhor = None
         melhor_score = 0
@@ -330,7 +347,7 @@ class Bot:
 
 👉🏼 HORARIO: {hora}
 
-🏳ATIVO: {ativo}-OTC {direcao}
+🏳ATIVO: {ativo} {direcao}
 
 📊 Confiança: {conf:.0f}%
 🎯 Confluências: {confs}/4
@@ -393,7 +410,7 @@ class Bot:
         total = self.placar['w'] + self.placar['g1'] + self.placar['l']
         tx = round(((self.placar['w'] + self.placar['g1']) / total) * 100, 1) if total > 0 else 0.0
         msg = f"""{resultado}
-📊 {ativo}-OTC | {direcao} {'🟢' if direcao=='CALL' else '🔴'}
+📊 {ativo} | {direcao} {'🟢' if direcao=='CALL' else '🔴'}
 📊 Placar: 🟢{self.placar['w']}W 🟡{self.placar['g1']}G1 🔴{self.placar['l']}L
 🎯 Assertividade: {tx}%"""
         self.tg.send(msg)
@@ -409,8 +426,9 @@ class Bot:
     async def executar(self):
         banner()
         print("⚛️ Bot QUANTUM TRIPLE M1 iniciando...")
+        total_ativos = len(ATIVOS_OTC) + len(ATIVOS_MERCADO)
         self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 ATIVADO*
-📊 {len(ATIVOS_OTC)} Pares OTC
+📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ M1
 🎯 4 Confluências:
    • EMA9 vs EMA21
