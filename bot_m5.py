@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M1 v4.1 - MULTI-CONFLUÊNCIA (S/R Penalty)
+⚛️ QUANTUM TRIPLE M1 v4.2 - MULTI-CONFLUÊNCIA (RSI Exaustão + S/R Penalty)
 🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
 💪 Mínimo 3/5 confirmações
 📊 6 Pares OTC + 6 Pares Mercado Aberto
 ⏱️ M1
 🔄 Gale 1.5x
 
-MUDANÇAS v4.1:
-✅ Penalidade -15% quando S/R contraria a direção
-   (CALL na resistência / PUT no suporte)
-✅ Bloqueia sinais fracos contra S/R automaticamente
-   via CONFIANCA_MINIMA = 70
+MUDANÇAS v4.2 (sobre v4.1):
+✅ RSI exaustão: bloqueia RSI >= 68 (sobrecompra) e <= 32 (sobrevenda)
+✅ INTERVALO_MINIMO = 600 (10 minutos) — era 900
+✅ Tolerância S/R = 0,8 ATR — era 0,5 (detecta zonas mais distantes)
+✅ Mantida penalidade S/R -15%
 
 REGRAS DE HORÁRIO (forçadas UTC → BR):
   • Seg-Sex 00:00–15:59 → Mercado Aberto
@@ -38,7 +38,7 @@ def agora_br():
 # ═══════════════════════════════════════════
 # ⚙️ CONFIGURAÇÕES
 # ═══════════════════════════════════════════
-INTERVALO_MINIMO = 900
+INTERVALO_MINIMO = 600         # ← v4.2: 10 minutos por ativo
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
 ANTECEDENCIA = 10
@@ -47,12 +47,15 @@ CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
 MIN_CONFLUENCIAS = 3
-PENALIDADE_SR = -15            # ← NOVO: penalidade quando S/R contraria
+PENALIDADE_SR = -15
+RSI_EXAUSTAO_ALTA = 68         # ← v4.2: bloqueia RSI acima disso (CALL)
+RSI_EXAUSTAO_BAIXA = 32        # ← v4.2: bloqueia RSI abaixo disso (PUT)
+TOLERANCIA_SR_ATR = 0.8        # ← v4.2: tolerância S/R (era 0,5)
 DEBUG_HORARIO = True
 
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M1 v4.1 - Multi-Confluência (S/R Penalty)")
+    print("⚛️ QUANTUM TRIPLE M1 v4.2 - Multi-Confluência")
 
 
 def carregar_config():
@@ -182,7 +185,7 @@ def encontrar_suporte_resistencia(velas, lookback=20):
     return min(lows), max(highs)
 
 
-def proximo_de_nivel(preco, suporte, resistencia, atr, tolerancia_atr=0.5):
+def proximo_de_nivel(preco, suporte, resistencia, atr, tolerancia_atr=0.8):
     if suporte is None or resistencia is None or atr <= 0:
         return None
     tol = atr * tolerancia_atr
@@ -202,12 +205,10 @@ def quantum_triple(velas):
     """
     5 confluências:
       1) EMA9 vs EMA21
-      2) RSI Wilder (zona morta 45–55)
+      2) RSI Wilder (zona morta 45–55 + exaustão 68/32)
       3) Força do candle
       4) Rompimento da vela anterior
-      5) Suporte / Resistência
-
-    v4.1: penalidade de -15% se S/R contraria a direção.
+      5) Suporte / Resistência (tolerância 0,8 ATR)
     """
     if len(velas) < 30:
         return None
@@ -225,7 +226,15 @@ def quantum_triple(velas):
         return None
     if valor_atr < ATR_MINIMO_RELATIVO:
         return None
+
+    # Zona morta de RSI
     if 45 <= valor_rsi <= 55:
+        return None
+
+    # ⚠️ v4.2: Filtro de exaustão (evita reversão)
+    if valor_rsi >= RSI_EXAUSTAO_ALTA:
+        return None
+    if valor_rsi <= RSI_EXAUSTAO_BAIXA:
         return None
 
     conf_call = 0
@@ -256,9 +265,12 @@ def quantum_triple(velas):
     elif atual["low"] < anterior["low"] and atual["close"] < atual["open"]:
         conf_put += 1
 
-    # 5) Suporte / Resistência
+    # 5) Suporte / Resistência (tolerância 0,8 ATR agora)
     suporte, resistencia = encontrar_suporte_resistencia(velas, lookback=20)
-    zona = proximo_de_nivel(atual["close"], suporte, resistencia, valor_atr, 0.5)
+    zona = proximo_de_nivel(
+        atual["close"], suporte, resistencia, valor_atr,
+        tolerancia_atr=TOLERANCIA_SR_ATR
+    )
     if zona == "suporte":
         conf_call += 1
     elif zona == "resistencia":
@@ -277,13 +289,13 @@ def quantum_triple(velas):
     if total < MIN_CONFLUENCIAS:
         return None
 
-    # ── Confiança real ──
+    # Confiança real
     dist_ema = abs(ema_9 - ema_21) / valor_atr
     forca_tendencia = min(1.0, dist_ema / 1.5)
     forca_rsi = min(1.0, abs(valor_rsi - 50) / 30)
     bonus_sr = 1.0 if zona else 0.0
 
-    # ⚠️ NOVO v4.1: penalidade se S/R contraria direção
+    # Penalidade se S/R contraria
     penalidade_sr = 0
     if direcao == "CALL" and zona == "resistencia":
         penalidade_sr = PENALIDADE_SR
@@ -308,7 +320,7 @@ def quantum_triple(velas):
         "zona": zona or "—",
         "suporte": round(suporte, 5) if suporte else None,
         "resistencia": round(resistencia, 5) if resistencia else None,
-        "penalidade_sr": penalidade_sr,   # útil pra debug
+        "penalidade_sr": penalidade_sr,
     }
 
 
@@ -496,7 +508,7 @@ class Bot:
 
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M1 v4.1 ✅
+✳️ QUANTUM TRIPLE M1 v4.2 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
@@ -618,22 +630,25 @@ class Bot:
     # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M1 v4.1 iniciando...")
+        print("⚛️ Bot QUANTUM TRIPLE M1 v4.2 iniciando...")
         print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
               f"(dia_semana={agora_br().weekday()})")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.1 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.2 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ M1
 🎯 5 Confluências:
    • EMA9 vs EMA21
-   • RSI (Wilder 14 + zona morta)
+   • RSI (Wilder 14 + zona morta + exaustão)
    • Força do Candle
    • Rompimento
    • Suporte/Resistência
-⚠️ *Penalidade S/R:* -15% quando S/R contraria direção
+⚠️ *RSI exaustão:* bloqueia >= {RSI_EXAUSTAO_ALTA} e <= {RSI_EXAUSTAO_BAIXA}
+⚠️ *Penalidade S/R:* {PENALIDADE_SR}% se contraria
+⚠️ *Tolerância S/R:* {TOLERANCIA_SR_ATR} ATR
 💪 Mínimo {MIN_CONFLUENCIAS}/5 confirmações
 💵 Payout mínimo: {PAYOUT_MINIMO}%
+⏱️ Intervalo mínimo: {INTERVALO_MINIMO // 60} min por ativo
 🕐 *Horários (BR):*
    • Seg-Sex 00:00–15:59 → Mercado Aberto
    • Seg-Sex 16:00–23:59 → OTC
