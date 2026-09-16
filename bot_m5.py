@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M1 v4.2 - MULTI-CONFLUÊNCIA (RSI Exaustão + S/R Penalty)
+⚛️ QUANTUM TRIPLE M1 v4.3 - MULTI-CONFLUÊNCIA (Intervalo Global)
 🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
 💪 Mínimo 3/5 confirmações
 📊 6 Pares OTC + 6 Pares Mercado Aberto
 ⏱️ M1
 🔄 Gale 1.5x
 
-MUDANÇAS v4.2 (sobre v4.1):
-✅ RSI exaustão: bloqueia RSI >= 68 (sobrecompra) e <= 32 (sobrevenda)
-✅ INTERVALO_MINIMO = 600 (10 minutos) — era 900
-✅ Tolerância S/R = 0,8 ATR — era 0,5 (detecta zonas mais distantes)
-✅ Mantida penalidade S/R -15%
+MUDANÇAS v4.3:
+✅ INTERVALO GLOBAL de 10 min (1 sinal a cada 10 min, QUALQUER par)
+   — Antes era por ativo (v4.2)
+✅ RSI exaustão: bloqueia RSI >= 68 e <= 32
+✅ Tolerância S/R = 0,8 ATR
+✅ Penalidade S/R = -15%
 
 REGRAS DE HORÁRIO (forçadas UTC → BR):
   • Seg-Sex 00:00–15:59 → Mercado Aberto
@@ -38,24 +39,24 @@ def agora_br():
 # ═══════════════════════════════════════════
 # ⚙️ CONFIGURAÇÕES
 # ═══════════════════════════════════════════
-INTERVALO_MINIMO = 600         # ← v4.2: 10 minutos por ativo
+INTERVALO_MINIMO = 600         # 10 minutos — GLOBAL (qualquer par)
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-ANTECEDENCIA = 10
+ANTECEDENCIA = 30
 TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
 MIN_CONFLUENCIAS = 3
 PENALIDADE_SR = -15
-RSI_EXAUSTAO_ALTA = 68         # ← v4.2: bloqueia RSI acima disso (CALL)
-RSI_EXAUSTAO_BAIXA = 32        # ← v4.2: bloqueia RSI abaixo disso (PUT)
-TOLERANCIA_SR_ATR = 0.8        # ← v4.2: tolerância S/R (era 0,5)
+RSI_EXAUSTAO_ALTA = 68
+RSI_EXAUSTAO_BAIXA = 32
+TOLERANCIA_SR_ATR = 0.8
 DEBUG_HORARIO = True
 
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M1 v4.2 - Multi-Confluência")
+    print("⚛️ QUANTUM TRIPLE M1 v4.3 - Multi-Confluência (Intervalo Global)")
 
 
 def carregar_config():
@@ -231,7 +232,7 @@ def quantum_triple(velas):
     if 45 <= valor_rsi <= 55:
         return None
 
-    # ⚠️ v4.2: Filtro de exaustão (evita reversão)
+    # Filtro de exaustão
     if valor_rsi >= RSI_EXAUSTAO_ALTA:
         return None
     if valor_rsi <= RSI_EXAUSTAO_BAIXA:
@@ -265,7 +266,7 @@ def quantum_triple(velas):
     elif atual["low"] < anterior["low"] and atual["close"] < atual["open"]:
         conf_put += 1
 
-    # 5) Suporte / Resistência (tolerância 0,8 ATR agora)
+    # 5) Suporte / Resistência
     suporte, resistencia = encontrar_suporte_resistencia(velas, lookback=20)
     zona = proximo_de_nivel(
         atual["close"], suporte, resistencia, valor_atr,
@@ -336,7 +337,7 @@ class Bot:
 
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0, 'e': 0}
-        self.ult_sinal = {}
+        self.ult_sinal_global = 0          # ← v4.3: timestamp do último sinal (GLOBAL)
         self.sinais = 0
         self.ultimo_dia = agora_br().day
         self._monitorando = set()
@@ -508,7 +509,7 @@ class Bot:
 
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M1 v4.2 ✅
+✳️ QUANTUM TRIPLE M1 v4.3 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
@@ -630,11 +631,11 @@ class Bot:
     # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M1 v4.2 iniciando...")
+        print("⚛️ Bot QUANTUM TRIPLE M1 v4.3 iniciando...")
         print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
               f"(dia_semana={agora_br().weekday()})")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.2 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.3 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ M1
 🎯 5 Confluências:
@@ -648,7 +649,7 @@ class Bot:
 ⚠️ *Tolerância S/R:* {TOLERANCIA_SR_ATR} ATR
 💪 Mínimo {MIN_CONFLUENCIAS}/5 confirmações
 💵 Payout mínimo: {PAYOUT_MINIMO}%
-⏱️ Intervalo mínimo: {INTERVALO_MINIMO // 60} min por ativo
+⏱️ *INTERVALO GLOBAL:* {INTERVALO_MINIMO // 60} min (qualquer par)
 🕐 *Horários (BR):*
    • Seg-Sex 00:00–15:59 → Mercado Aberto
    • Seg-Sex 16:00–23:59 → OTC
@@ -685,12 +686,12 @@ class Bot:
                     sinal = self.buscar_sinal()
 
                     if sinal:
-                        ult = self.ult_sinal.get(sinal['ativo'], 0)
-                        if time.time() - ult > INTERVALO_MINIMO:
+                        # ⚠️ v4.3: INTERVALO GLOBAL
+                        if time.time() - self.ult_sinal_global > INTERVALO_MINIMO:
                             if tempo_ate_envio > 0:
                                 await asyncio.sleep(tempo_ate_envio)
 
-                            self.ult_sinal[sinal['ativo']] = time.time()
+                            self.ult_sinal_global = time.time()
                             self.sinais += 1
                             self.tg.send(self.formatar_sinal(sinal, horario_entrada))
                             print(
