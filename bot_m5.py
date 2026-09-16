@@ -40,12 +40,12 @@ FUSO_BR = timezone(timedelta(hours=-3))
 INTERVALO_MINIMO = 900          # 15 min entre sinais POR ATIVO
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-ANTECEDENCIA = 45
+ANTECEDENCIA = 30
 TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
-MIN_CONFLUENCIAS = 4            # mínimo de 3 de 5 confluências
+MIN_CONFLUENCIAS = 3            # mínimo de 3 de 5 confluências
 
 
 def banner():
@@ -108,7 +108,7 @@ class Telegram:
                 f"{self.url}/sendMessage",
                 json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"},
                 timeout=10
-            )
+            ).raise_for_status()
         except Exception as e:
             print(f"⚠️ Telegram erro: {e}")
 
@@ -384,8 +384,16 @@ class Bot:
             info = payouts.get(base, {}) if payouts else {}
             if not info:
                 return True
-            melhor = max(info.values()) if info else 0
-            return melhor * 100 >= minimo
+            valores = []
+            for valor in info.values():
+                if isinstance(valor, dict):
+                    valores.extend(v for v in valor.values() if isinstance(v, (int, float)))
+                elif isinstance(valor, (int, float)):
+                    valores.append(valor)
+            melhor = max(valores, default=0.0)
+            # A API pode devolver 0.80 ou 80; aceite os dois formatos.
+            percentual = melhor * 100 if melhor <= 1 else melhor
+            return percentual >= minimo
         except Exception as e:
             print(f"⚠️ payout_ok({ativo}): {e}")
             return True
@@ -409,16 +417,22 @@ class Bot:
                 c = api.get_candles(ativo_id, TIMEFRAME, 60, time.time())
                 if c and len(c) > 0:
                     self.velas[nome].clear()
+                    agora_ts = time.time()
                     for x in c[-60:]:
-                        if isinstance(x, dict):
-                            self.velas[nome].append({
-                                'time': datetime.fromtimestamp(x.get('from', 0), FUSO_BR),
-                                'open': float(x['open']),
-                                'high': float(x['max']),
-                                'low': float(x['min']),
-                                'close': float(x['close']),
-                                'volume': int(x.get('volume', 0)),
-                            })
+                        if not isinstance(x, dict):
+                            continue
+                        inicio = int(x.get('from', 0))
+                        # Nunca use a vela ainda em formação para gerar sinal.
+                        if inicio <= 0 or inicio + TIMEFRAME > agora_ts:
+                            continue
+                        self.velas[nome].append({
+                            'time': datetime.fromtimestamp(inicio, FUSO_BR),
+                            'open': float(x['open']),
+                            'high': float(x['max']),
+                            'low': float(x['min']),
+                            'close': float(x['close']),
+                            'volume': int(x.get('volume', 0)),
+                        })
             except Exception as e:
                 print(f"⚠️ velas {nome}: {type(e).__name__}: {e}")
                 continue
@@ -502,7 +516,7 @@ class Bot:
             return None
 
         for c in candles:
-            if abs((c['from'] + 60) - alvo_ts) < 5:
+            if abs((float(c['from']) + TIMEFRAME) - alvo_ts) < 5:
                 return c
         return None
 
