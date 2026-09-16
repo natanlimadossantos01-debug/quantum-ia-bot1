@@ -40,12 +40,12 @@ FUSO_BR = timezone(timedelta(hours=-3))
 INTERVALO_MINIMO = 900          # 15 min entre sinais POR ATIVO
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-ANTECEDENCIA = 10
+ANTECEDENCIA = 45
 TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
-MIN_CONFLUENCIAS = 3            # mínimo de 3 de 5 confluências
+MIN_CONFLUENCIAS = 4            # mínimo de 3 de 5 confluências
 
 
 def banner():
