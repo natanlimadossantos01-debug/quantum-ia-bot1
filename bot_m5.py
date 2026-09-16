@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M1 v4 - MULTI-CONFLUÊNCIA (BLINDADO)
+⚛️ QUANTUM TRIPLE M1 v4.1 - MULTI-CONFLUÊNCIA (S/R Penalty)
 🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
 💪 Mínimo 3/5 confirmações
 📊 6 Pares OTC + 6 Pares Mercado Aberto
 ⏱️ M1
 🔄 Gale 1.5x
 
-REGRAS DE HORÁRIO (forçadas em UTC → BR):
+MUDANÇAS v4.1:
+✅ Penalidade -15% quando S/R contraria a direção
+   (CALL na resistência / PUT no suporte)
+✅ Bloqueia sinais fracos contra S/R automaticamente
+   via CONFIANCA_MINIMA = 70
+
+REGRAS DE HORÁRIO (forçadas UTC → BR):
   • Seg-Sex 00:00–15:59 → Mercado Aberto
   • Seg-Sex 16:00–23:59 → OTC
   • Sáb/Dom           → OTC o dia todo
@@ -25,10 +31,7 @@ FUSO_BR = timezone(timedelta(hours=-3))
 
 
 def agora_br():
-    """
-    Sempre retorna hora de Brasília, independente do TZ do servidor.
-    Converte explicitamente de UTC para evitar bugs em containers.
-    """
+    """Sempre retorna hora de Brasília, independente do TZ do servidor."""
     return datetime.now(timezone.utc).astimezone(FUSO_BR)
 
 
@@ -38,17 +41,18 @@ def agora_br():
 INTERVALO_MINIMO = 900
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-ANTECEDENCIA = 30
+ANTECEDENCIA = 10
 TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
-MIN_CONFLUENCIAS = 4
-DEBUG_HORARIO = True   # mostra no console por que cada ativo passa/bloqueia
+MIN_CONFLUENCIAS = 3
+PENALIDADE_SR = -15            # ← NOVO: penalidade quando S/R contraria
+DEBUG_HORARIO = True
 
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M1 v4 - Multi-Confluência (Blindado)")
+    print("⚛️ QUANTUM TRIPLE M1 v4.1 - Multi-Confluência (S/R Penalty)")
 
 
 def carregar_config():
@@ -202,6 +206,8 @@ def quantum_triple(velas):
       3) Força do candle
       4) Rompimento da vela anterior
       5) Suporte / Resistência
+
+    v4.1: penalidade de -15% se S/R contraria a direção.
     """
     if len(velas) < 30:
         return None
@@ -225,27 +231,32 @@ def quantum_triple(velas):
     conf_call = 0
     conf_put = 0
 
+    # 1) Tendência EMA
     if ema_9 > ema_21:
         conf_call += 1
     elif ema_9 < ema_21:
         conf_put += 1
 
+    # 2) RSI
     if valor_rsi > 55:
         conf_call += 1
     elif valor_rsi < 45:
         conf_put += 1
 
+    # 3) Força do candle
     corpo = atual["close"] - atual["open"]
     if corpo > 0 and abs(corpo) >= valor_atr * 0.15:
         conf_call += 1
     elif corpo < 0 and abs(corpo) >= valor_atr * 0.15:
         conf_put += 1
 
+    # 4) Rompimento
     if atual["high"] > anterior["high"] and atual["close"] > atual["open"]:
         conf_call += 1
     elif atual["low"] < anterior["low"] and atual["close"] < atual["open"]:
         conf_put += 1
 
+    # 5) Suporte / Resistência
     suporte, resistencia = encontrar_suporte_resistencia(velas, lookback=20)
     zona = proximo_de_nivel(atual["close"], suporte, resistencia, valor_atr, 0.5)
     if zona == "suporte":
@@ -253,6 +264,7 @@ def quantum_triple(velas):
     elif zona == "resistencia":
         conf_put += 1
 
+    # Decisão
     if conf_call > conf_put:
         direcao = "CALL"
         total = conf_call
@@ -265,11 +277,18 @@ def quantum_triple(velas):
     if total < MIN_CONFLUENCIAS:
         return None
 
-    # Confiança recalibrada (distribuição real)
+    # ── Confiança real ──
     dist_ema = abs(ema_9 - ema_21) / valor_atr
     forca_tendencia = min(1.0, dist_ema / 1.5)
     forca_rsi = min(1.0, abs(valor_rsi - 50) / 30)
     bonus_sr = 1.0 if zona else 0.0
+
+    # ⚠️ NOVO v4.1: penalidade se S/R contraria direção
+    penalidade_sr = 0
+    if direcao == "CALL" and zona == "resistencia":
+        penalidade_sr = PENALIDADE_SR
+    elif direcao == "PUT" and zona == "suporte":
+        penalidade_sr = PENALIDADE_SR
 
     confianca = int(
         40
@@ -277,6 +296,7 @@ def quantum_triple(velas):
         + forca_tendencia * 8
         + forca_rsi * 7
         + bonus_sr * 5
+        + penalidade_sr
     )
     confianca = max(0, min(95, confianca))
 
@@ -288,6 +308,7 @@ def quantum_triple(velas):
         "zona": zona or "—",
         "suporte": round(suporte, 5) if suporte else None,
         "resistencia": round(resistencia, 5) if resistencia else None,
+        "penalidade_sr": penalidade_sr,   # útil pra debug
     }
 
 
@@ -343,7 +364,7 @@ class Bot:
         """
         agora = agora_br()
         h = agora.hour
-        dia_semana = agora.weekday()  # 0=seg ... 6=dom
+        dia_semana = agora.weekday()
         fim_de_semana = dia_semana >= 5
         eh_otc = ativo.endswith("-OTC")
 
@@ -388,7 +409,6 @@ class Bot:
         for nome, ativo_id in todos.items():
             if nome in self._monitorando:
                 continue
-            # ⚠️ Só busca velas de ativos que estão no horário válido
             if not self.horario_valido(nome):
                 continue
 
@@ -418,7 +438,6 @@ class Bot:
     # ── Sinais ──
     def buscar_sinal(self):
         agora = agora_br()
-        # Log de horário 1x por minuto
         if time.time() - self._ultimo_log_horario > 60:
             self._ultimo_log_horario = time.time()
             print(
@@ -434,10 +453,8 @@ class Bot:
                 continue
 
             h_ok = self.horario_valido(par, debug=DEBUG_HORARIO)
-
             if not h_ok:
                 continue
-
             if not self.payout_ok(par):
                 continue
 
@@ -479,7 +496,7 @@ class Bot:
 
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M1 v4 ✅
+✳️ QUANTUM TRIPLE M1 v4.1 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
@@ -601,11 +618,11 @@ class Bot:
     # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M1 v4 iniciando...")
+        print("⚛️ Bot QUANTUM TRIPLE M1 v4.1 iniciando...")
         print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
               f"(dia_semana={agora_br().weekday()})")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.1 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ M1
 🎯 5 Confluências:
@@ -614,6 +631,7 @@ class Bot:
    • Força do Candle
    • Rompimento
    • Suporte/Resistência
+⚠️ *Penalidade S/R:* -15% quando S/R contraria direção
 💪 Mínimo {MIN_CONFLUENCIAS}/5 confirmações
 💵 Payout mínimo: {PAYOUT_MINIMO}%
 🕐 *Horários (BR):*
