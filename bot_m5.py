@@ -1,43 +1,41 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M1 v3 - MULTI-CONFLUÊNCIA
-🎯 5 Confluências: EMA9/EMA21, RSI, Força do Candle, Rompimento, Suporte/Resistência
-💪 Mínimo 3 confirmações
-📊 6 Pares OTC + 6 Pares Mercado Aberto (SOMENTE MOEDAS)
+⚛️ QUANTUM TRIPLE M1 v4 - MULTI-CONFLUÊNCIA (BLINDADO)
+🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
+💪 Mínimo 3/5 confirmações
+📊 6 Pares OTC + 6 Pares Mercado Aberto
 ⏱️ M1
 🔄 Gale 1.5x
 
-REGRAS DE HORÁRIO:
-  • Segunda a Sexta:
-      - 00:00 às 15:59 → Mercado Aberto
-      - 16:00 às 23:59 → OTC
-  • Sábado e Domingo:
-      - OTC o dia todo
-
-MELHORIAS v3:
-✅ RSI com suavização de Wilder
-✅ Zona morta de RSI (45-55) bloqueia sinal
-✅ Suporte e Resistência (5ª confluência)
-✅ Filtro de horário correto (OTC x Mercado Aberto x Fim de semana)
-✅ Confiança real (distância EMAs + RSI + S/R)
-✅ Monitor de resultado por timestamp de FECHAMENTO
-✅ Validação de payout
-✅ Deduplicação por ativo
-✅ Filtro de ATR mínimo
-✅ Tratamento de empate
+REGRAS DE HORÁRIO (forçadas em UTC → BR):
+  • Seg-Sex 00:00–15:59 → Mercado Aberto
+  • Seg-Sex 16:00–23:59 → OTC
+  • Sáb/Dom           → OTC o dia todo
 """
-import asyncio, time, requests, numpy as np, signal, sys, json, os
+import asyncio, time, requests, numpy as np, signal, sys, os
 from datetime import datetime, timedelta, timezone
 from collections import deque
-from pathlib import Path
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
+# ═══════════════════════════════════════════
+# 🌎 FUSO HORÁRIO BLINDADO
+# ═══════════════════════════════════════════
 FUSO_BR = timezone(timedelta(hours=-3))
+
+
+def agora_br():
+    """
+    Sempre retorna hora de Brasília, independente do TZ do servidor.
+    Converte explicitamente de UTC para evitar bugs em containers.
+    """
+    return datetime.now(timezone.utc).astimezone(FUSO_BR)
+
 
 # ═══════════════════════════════════════════
 # ⚙️ CONFIGURAÇÕES
 # ═══════════════════════════════════════════
-INTERVALO_MINIMO = 900          # 15 min entre sinais POR ATIVO
+INTERVALO_MINIMO = 900
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
 ANTECEDENCIA = 30
@@ -45,11 +43,12 @@ TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
 ATR_MINIMO_RELATIVO = 0.00002
-MIN_CONFLUENCIAS = 3            # mínimo de 3 de 5 confluências
+MIN_CONFLUENCIAS = 4
+DEBUG_HORARIO = True   # mostra no console por que cada ativo passa/bloqueia
 
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M1 v3 - Multi-Confluência")
+    print("⚛️ QUANTUM TRIPLE M1 v4 - Multi-Confluência (Blindado)")
 
 
 def carregar_config():
@@ -76,7 +75,7 @@ SENHA = cfg['senha']
 from iqoptionapi.stable_api import IQ_Option
 
 # ═══════════════════════════════════════════
-# 📊 ATIVOS - SOMENTE MOEDAS
+# 📊 ATIVOS
 # ═══════════════════════════════════════════
 ATIVOS_OTC = {
     "EURUSD-OTC": "EURUSD-OTC",
@@ -108,7 +107,7 @@ class Telegram:
                 f"{self.url}/sendMessage",
                 json={"chat_id": self.c, "text": txt, "parse_mode": "Markdown"},
                 timeout=10
-            ).raise_for_status()
+            )
         except Exception as e:
             print(f"⚠️ Telegram erro: {e}")
 
@@ -127,7 +126,6 @@ def ema(fechamentos, periodo):
 
 
 def calcular_rsi(velas, periodo=14):
-    """RSI com suavização de Wilder."""
     fechamentos = np.array([v["close"] for v in velas], dtype=float)
     if len(fechamentos) <= periodo:
         return 50.0
@@ -169,29 +167,23 @@ def calcular_atr(velas, periodo=14):
 
 
 # ═══════════════════════════════════════════
-# 📍 SUPORTE E RESISTÊNCIA
+# 📍 SUPORTE / RESISTÊNCIA
 # ═══════════════════════════════════════════
 def encontrar_suporte_resistencia(velas, lookback=20):
-    """S/R simples por máx/mín das últimas `lookback` velas."""
     if len(velas) < lookback + 2:
         return None, None
-
     recentes = velas[-lookback:-1]
     highs = [v["high"] for v in recentes]
     lows = [v["low"] for v in recentes]
-
     return min(lows), max(highs)
 
 
 def proximo_de_nivel(preco, suporte, resistencia, atr, tolerancia_atr=0.5):
-    """Retorna 'suporte', 'resistencia' ou None."""
     if suporte is None or resistencia is None or atr <= 0:
         return None
-
     tol = atr * tolerancia_atr
     dist_sup = abs(preco - suporte)
     dist_res = abs(preco - resistencia)
-
     if dist_sup <= tol and dist_sup < dist_res:
         return "suporte"
     if dist_res <= tol and dist_res < dist_sup:
@@ -206,10 +198,10 @@ def quantum_triple(velas):
     """
     5 confluências:
       1) EMA9 vs EMA21
-      2) RSI (Wilder 14) — com zona morta
+      2) RSI Wilder (zona morta 45–55)
       3) Força do candle
       4) Rompimento da vela anterior
-      5) Reação em Suporte/Resistência
+      5) Suporte / Resistência
     """
     if len(velas) < 30:
         return None
@@ -225,52 +217,42 @@ def quantum_triple(velas):
 
     if ema_9 is None or ema_21 is None or valor_atr <= 0:
         return None
-
     if valor_atr < ATR_MINIMO_RELATIVO:
         return None
-
-    # Zona morta de RSI
     if 45 <= valor_rsi <= 55:
         return None
 
     conf_call = 0
     conf_put = 0
 
-    # 1) Tendência EMA
     if ema_9 > ema_21:
         conf_call += 1
     elif ema_9 < ema_21:
         conf_put += 1
 
-    # 2) RSI
     if valor_rsi > 55:
         conf_call += 1
     elif valor_rsi < 45:
         conf_put += 1
 
-    # 3) Força do candle
     corpo = atual["close"] - atual["open"]
     if corpo > 0 and abs(corpo) >= valor_atr * 0.15:
         conf_call += 1
     elif corpo < 0 and abs(corpo) >= valor_atr * 0.15:
         conf_put += 1
 
-    # 4) Rompimento
     if atual["high"] > anterior["high"] and atual["close"] > atual["open"]:
         conf_call += 1
     elif atual["low"] < anterior["low"] and atual["close"] < atual["open"]:
         conf_put += 1
 
-    # 5) Suporte / Resistência
     suporte, resistencia = encontrar_suporte_resistencia(velas, lookback=20)
     zona = proximo_de_nivel(atual["close"], suporte, resistencia, valor_atr, 0.5)
-
     if zona == "suporte":
         conf_call += 1
     elif zona == "resistencia":
         conf_put += 1
 
-    # Decisão
     if conf_call > conf_put:
         direcao = "CALL"
         total = conf_call
@@ -283,18 +265,18 @@ def quantum_triple(velas):
     if total < MIN_CONFLUENCIAS:
         return None
 
-    # Confiança real
+    # Confiança recalibrada (distribuição real)
     dist_ema = abs(ema_9 - ema_21) / valor_atr
     forca_tendencia = min(1.0, dist_ema / 1.5)
     forca_rsi = min(1.0, abs(valor_rsi - 50) / 30)
     bonus_sr = 1.0 if zona else 0.0
 
     confianca = int(
-        45
-        + total * 6
-        + forca_tendencia * 10
-        + forca_rsi * 8
-        + bonus_sr * 7
+        40
+        + total * 7
+        + forca_tendencia * 8
+        + forca_rsi * 7
+        + bonus_sr * 5
     )
     confianca = max(0, min(95, confianca))
 
@@ -323,8 +305,9 @@ class Bot:
         self.placar = {'w': 0, 'g1': 0, 'l': 0, 'e': 0}
         self.ult_sinal = {}
         self.sinais = 0
-        self.ultimo_dia = datetime.now(FUSO_BR).day
+        self.ultimo_dia = agora_br().day
         self._monitorando = set()
+        self._ultimo_log_horario = 0
 
     # ── Conexão ──
     def conectar_iq(self):
@@ -352,28 +335,33 @@ class Bot:
         return self.iq_api
 
     # ── Filtros ──
-    def horario_valido(self, ativo):
+    def horario_valido(self, ativo, debug=False):
         """
-        Seg-Sex:
-          00:00–15:59 → Mercado Aberto
-          16:00–23:59 → OTC
-        Sáb/Dom:
-          OTC o dia todo
+        Seg-Sex 00:00–15:59 → Mercado Aberto
+        Seg-Sex 16:00–23:59 → OTC
+        Sáb/Dom            → OTC o dia todo
         """
-        agora = datetime.now(FUSO_BR)
+        agora = agora_br()
         h = agora.hour
-        dia_semana = agora.weekday()  # 0=seg, 6=dom
+        dia_semana = agora.weekday()  # 0=seg ... 6=dom
         fim_de_semana = dia_semana >= 5
         eh_otc = ativo.endswith("-OTC")
 
         if fim_de_semana:
-            return eh_otc  # só OTC
-
-        # Dias úteis
-        if eh_otc:
-            return 16 <= h <= 23
+            ok = eh_otc
+        elif eh_otc:
+            ok = 16 <= h <= 23
         else:
-            return 0 <= h < 16
+            ok = 0 <= h < 16
+
+        if debug:
+            tipo = "OTC" if eh_otc else "ABERTO"
+            print(
+                f"   🔎 {ativo:14s} [{tipo:6s}] "
+                f"h={h:02d} | dia_sem={dia_semana} | ok={ok}"
+            )
+
+        return ok
 
     def payout_ok(self, ativo, minimo=PAYOUT_MINIMO):
         try:
@@ -384,16 +372,8 @@ class Bot:
             info = payouts.get(base, {}) if payouts else {}
             if not info:
                 return True
-            valores = []
-            for valor in info.values():
-                if isinstance(valor, dict):
-                    valores.extend(v for v in valor.values() if isinstance(v, (int, float)))
-                elif isinstance(valor, (int, float)):
-                    valores.append(valor)
-            melhor = max(valores, default=0.0)
-            # A API pode devolver 0.80 ou 80; aceite os dois formatos.
-            percentual = melhor * 100 if melhor <= 1 else melhor
-            return percentual >= minimo
+            melhor = max(info.values()) if info else 0
+            return melhor * 100 >= minimo
         except Exception as e:
             print(f"⚠️ payout_ok({ativo}): {e}")
             return True
@@ -408,6 +388,10 @@ class Bot:
         for nome, ativo_id in todos.items():
             if nome in self._monitorando:
                 continue
+            # ⚠️ Só busca velas de ativos que estão no horário válido
+            if not self.horario_valido(nome):
+                continue
+
             try:
                 if not api.check_connect():
                     api = await self.reconectar_se_necessario()
@@ -417,42 +401,50 @@ class Bot:
                 c = api.get_candles(ativo_id, TIMEFRAME, 60, time.time())
                 if c and len(c) > 0:
                     self.velas[nome].clear()
-                    agora_ts = time.time()
                     for x in c[-60:]:
-                        if not isinstance(x, dict):
-                            continue
-                        inicio = int(x.get('from', 0))
-                        # Nunca use a vela ainda em formação para gerar sinal.
-                        if inicio <= 0 or inicio + TIMEFRAME > agora_ts:
-                            continue
-                        self.velas[nome].append({
-                            'time': datetime.fromtimestamp(inicio, FUSO_BR),
-                            'open': float(x['open']),
-                            'high': float(x['max']),
-                            'low': float(x['min']),
-                            'close': float(x['close']),
-                            'volume': int(x.get('volume', 0)),
-                        })
+                        if isinstance(x, dict):
+                            self.velas[nome].append({
+                                'time': datetime.fromtimestamp(x.get('from', 0), FUSO_BR),
+                                'open': float(x['open']),
+                                'high': float(x['max']),
+                                'low': float(x['min']),
+                                'close': float(x['close']),
+                                'volume': int(x.get('volume', 0)),
+                            })
             except Exception as e:
                 print(f"⚠️ velas {nome}: {type(e).__name__}: {e}")
                 continue
 
     # ── Sinais ──
     def buscar_sinal(self):
+        agora = agora_br()
+        # Log de horário 1x por minuto
+        if time.time() - self._ultimo_log_horario > 60:
+            self._ultimo_log_horario = time.time()
+            print(
+                f"\n🔍 [buscar_sinal] {agora.strftime('%d/%m %H:%M:%S')} "
+                f"| dia_semana={agora.weekday()}"
+            )
+
         melhor = None
         melhor_score = 0
 
         for par, velas in self.velas.items():
             if len(velas) < 30:
                 continue
-            if not self.horario_valido(par):
+
+            h_ok = self.horario_valido(par, debug=DEBUG_HORARIO)
+
+            if not h_ok:
                 continue
+
             if not self.payout_ok(par):
                 continue
 
             resultado = quantum_triple(list(velas))
             if not resultado:
                 continue
+
             if resultado['confidence'] < CONFIANCA_MINIMA:
                 continue
 
@@ -473,7 +465,7 @@ class Bot:
         return melhor
 
     def calcular_horario_entrada(self):
-        agora = datetime.now(FUSO_BR)
+        agora = agora_br()
         return agora.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
     def formatar_sinal(self, sinal, horario):
@@ -487,7 +479,7 @@ class Bot:
 
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M1 ✅
+✳️ QUANTUM TRIPLE M1 v4 ✅
 ⏲ EXPIRAÇÃO: M1
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
@@ -504,7 +496,7 @@ class Bot:
     # ── Monitor ──
     async def _esperar_fechamento(self, horario_entrada):
         expira = horario_entrada + timedelta(minutes=1)
-        while datetime.now(FUSO_BR) < expira + timedelta(seconds=8):
+        while agora_br() < expira + timedelta(seconds=8):
             await asyncio.sleep(1)
 
     def _buscar_vela_fechada(self, api, ativo, horario_entrada):
@@ -516,7 +508,7 @@ class Bot:
             return None
 
         for c in candles:
-            if abs((float(c['from']) + TIMEFRAME) - alvo_ts) < 5:
+            if abs((c['from'] + 60) - alvo_ts) < 5:
                 return c
         return None
 
@@ -599,7 +591,7 @@ class Bot:
             self._monitorando.discard(ativo)
 
     def verificar_zeramento_diario(self):
-        agora = datetime.now(FUSO_BR)
+        agora = agora_br()
         if agora.day != self.ultimo_dia:
             self.ultimo_dia = agora.day
             self.placar = {'w': 0, 'g1': 0, 'l': 0, 'e': 0}
@@ -609,9 +601,11 @@ class Bot:
     # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M1 v3 iniciando...")
+        print("⚛️ Bot QUANTUM TRIPLE M1 v4 iniciando...")
+        print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
+              f"(dia_semana={agora_br().weekday()})")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v3 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ M1
 🎯 5 Confluências:
@@ -622,8 +616,10 @@ class Bot:
    • Suporte/Resistência
 💪 Mínimo {MIN_CONFLUENCIAS}/5 confirmações
 💵 Payout mínimo: {PAYOUT_MINIMO}%
-🕐 Mercado Aberto: 00h–16h (Seg-Sex)
-🕐 OTC: 16h–00h (Seg-Sex) + todo fim de semana
+🕐 *Horários (BR):*
+   • Seg-Sex 00:00–15:59 → Mercado Aberto
+   • Seg-Sex 16:00–23:59 → OTC
+   • Sáb/Dom → OTC o dia todo
 🔄 Gale 1.5x""")
 
         if not self.conectar_iq():
@@ -636,7 +632,7 @@ class Bot:
             try:
                 self.verificar_zeramento_diario()
 
-                agora = datetime.now(FUSO_BR)
+                agora = agora_br()
 
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
