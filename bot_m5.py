@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M1 v4.3 - MULTI-CONFLUÊNCIA (Intervalo Global)
+⚛️ QUANTUM TRIPLE M5 v4.4 - MULTI-CONFLUÊNCIA (M5)
 🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
 💪 Mínimo 3/5 confirmações
 📊 6 Pares OTC + 6 Pares Mercado Aberto
-⏱️ M1
+⏱️ M5 (5 minutos)
 🔄 Gale 1.5x
 
-MUDANÇAS v4.3:
-✅ INTERVALO GLOBAL de 10 min (1 sinal a cada 10 min, QUALQUER par)
-   — Antes era por ativo (v4.2)
-✅ RSI exaustão: bloqueia RSI >= 68 e <= 32
-✅ Tolerância S/R = 0,8 ATR
-✅ Penalidade S/R = -15%
+MUDANÇAS v4.4 (sobre v4.3):
+✅ TIMEFRAME = 300 (M5)
+✅ ANTECEDENCIA = 30s
+✅ INTERVALO_MINIMO GLOBAL = 900s (15 min)
+✅ ATR_MINIMO_RELATIVO = 0.0001
+✅ Alinhamento de candle M5 (00, 05, 10, 15, 20...)
+✅ Monitor de expiração em 5 min
 
 REGRAS DE HORÁRIO (forçadas UTC → BR):
   • Seg-Sex 00:00–15:59 → Mercado Aberto
@@ -39,14 +40,14 @@ def agora_br():
 # ═══════════════════════════════════════════
 # ⚙️ CONFIGURAÇÕES
 # ═══════════════════════════════════════════
-INTERVALO_MINIMO = 600         # 10 minutos — GLOBAL (qualquer par)
+TIMEFRAME = 300                # ← M5 (5 minutos)
+INTERVALO_MINIMO = 900         # 15 min GLOBAL (qualquer par)
+ANTECEDENCIA = 30              # 30s antes do candle M5 fechar
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-ANTECEDENCIA = 30
-TIMEFRAME = 60
 CONFIANCA_MINIMA = 70
 PAYOUT_MINIMO = 80
-ATR_MINIMO_RELATIVO = 0.00002
+ATR_MINIMO_RELATIVO = 0.0001   # ← M5: ATR maior
 MIN_CONFLUENCIAS = 3
 PENALIDADE_SR = -15
 RSI_EXAUSTAO_ALTA = 68
@@ -56,7 +57,7 @@ DEBUG_HORARIO = True
 
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M1 v4.3 - Multi-Confluência (Intervalo Global)")
+    print("⚛️ QUANTUM TRIPLE M5 v4.4 - Multi-Confluência")
 
 
 def carregar_config():
@@ -228,11 +229,8 @@ def quantum_triple(velas):
     if valor_atr < ATR_MINIMO_RELATIVO:
         return None
 
-    # Zona morta de RSI
     if 45 <= valor_rsi <= 55:
         return None
-
-    # Filtro de exaustão
     if valor_rsi >= RSI_EXAUSTAO_ALTA:
         return None
     if valor_rsi <= RSI_EXAUSTAO_BAIXA:
@@ -337,7 +335,7 @@ class Bot:
 
         self.iq_api = None
         self.placar = {'w': 0, 'g1': 0, 'l': 0, 'e': 0}
-        self.ult_sinal_global = 0          # ← v4.3: timestamp do último sinal (GLOBAL)
+        self.ult_sinal_global = 0
         self.sinais = 0
         self.ultimo_dia = agora_br().day
         self._monitorando = set()
@@ -494,9 +492,21 @@ class Bot:
 
         return melhor
 
+    # ── Cálculo do horário de entrada M5 ──
     def calcular_horario_entrada(self):
+        """
+        Retorna o timestamp do PRÓXIMO candle M5 (múltiplo de 5 minutos).
+        Ex: agora 12:47:33 → entrada 12:50:00
+        """
         agora = agora_br()
-        return agora.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        minuto_atual = agora.minute
+        # Próximo múltiplo de 5
+        proximo = ((minuto_atual // 5) + 1) * 5
+        base = agora.replace(second=0, microsecond=0)
+
+        if proximo >= 60:
+            return base.replace(minute=0) + timedelta(hours=1)
+        return base.replace(minute=proximo)
 
     def formatar_sinal(self, sinal, horario):
         zona = sinal.get('zona', '—')
@@ -509,8 +519,8 @@ class Bot:
 
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M1 v4.3 ✅
-⏲ EXPIRAÇÃO: M1
+✳️ QUANTUM TRIPLE M5 v4.4 ✅
+⏲ EXPIRAÇÃO: M5
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
 
@@ -523,22 +533,25 @@ class Bot:
 
 🍀🍀BOA SORTE 🍀🍀"""
 
-    # ── Monitor ──
-    async def _esperar_fechamento(self, horario_entrada):
-        expira = horario_entrada + timedelta(minutes=1)
+    # ── Monitor (agora expira em 5 min) ──
+    async def _esperar_fechamento(self, horario_entrada, minutos=5):
+        expira = horario_entrada + timedelta(minutes=minutos)
         while agora_br() < expira + timedelta(seconds=8):
             await asyncio.sleep(1)
 
-    def _buscar_vela_fechada(self, api, ativo, horario_entrada):
-        alvo_ts = (horario_entrada + timedelta(minutes=1)).timestamp()
+    def _buscar_vela_fechada(self, api, ativo, horario_entrada, minutos=5):
+        """Busca candle cujo fechamento == horario_entrada + `minutos`."""
+        alvo_ts = (horario_entrada + timedelta(minutes=minutos)).timestamp()
         try:
-            candles = api.get_candles(ativo, 60, 5, time.time())
+            # Pega candles recentes (5 velas M5 = 25 min de histórico)
+            candles = api.get_candles(ativo, TIMEFRAME, 5, time.time())
         except Exception as e:
             print(f"⚠️ leitura vela {ativo}: {e}")
             return None
 
         for c in candles:
-            if abs((c['from'] + 60) - alvo_ts) < 5:
+            # c['from'] é o início do candle; fecha em 'from + 300'
+            if abs((c['from'] + TIMEFRAME) - alvo_ts) < 30:
                 return c
         return None
 
@@ -548,14 +561,15 @@ class Bot:
         self._monitorando.add(ativo)
 
         try:
-            await self._esperar_fechamento(horario_entrada)
+            # Espera o candle M5 de entrada fechar (5 min)
+            await self._esperar_fechamento(horario_entrada, minutos=5)
 
             api = await self.reconectar_se_necessario()
             if not api:
                 self.tg.send(f"⚠️ Sem conexão para monitorar {ativo}")
                 return
 
-            vela = self._buscar_vela_fechada(api, ativo, horario_entrada)
+            vela = self._buscar_vela_fechada(api, ativo, horario_entrada, minutos=5)
             if vela is None:
                 self.tg.send(f"⚠️ Não consegui ler vela de {ativo}")
                 return
@@ -574,15 +588,16 @@ class Bot:
                 self.placar['w'] += 1
                 resultado = "✅ WIN"
             elif USAR_GALE:
-                proxima = horario_entrada + timedelta(minutes=1)
-                await self._esperar_fechamento(proxima)
+                # Gale: próximo candle M5 (5 min depois)
+                proxima = horario_entrada + timedelta(minutes=5)
+                await self._esperar_fechamento(proxima, minutos=5)
 
                 api = await self.reconectar_se_necessario()
                 if not api:
                     self.placar['l'] += 1
                     resultado = "❌ LOSS (sem conexão p/ gale)"
                 else:
-                    vela_g = self._buscar_vela_fechada(api, ativo, proxima)
+                    vela_g = self._buscar_vela_fechada(api, ativo, proxima, minutos=5)
                     if vela_g is None:
                         self.placar['l'] += 1
                         resultado = "❌ LOSS (sem leitura gale)"
@@ -631,13 +646,13 @@ class Bot:
     # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M1 v4.3 iniciando...")
+        print("⚛️ Bot QUANTUM TRIPLE M5 v4.4 iniciando...")
         print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
               f"(dia_semana={agora_br().weekday()})")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M1 v4.3 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M5 v4.4 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
-⏱️ M1
+⏱️ *M5 (5 minutos)*
 🎯 5 Confluências:
    • EMA9 vs EMA21
    • RSI (Wilder 14 + zona morta + exaustão)
@@ -675,18 +690,20 @@ class Bot:
                         print("🔄 Sem velas! Reconectando...")
                         self.iq_api = None
 
-                if agora.second in (0, 15, 30, 45):
+                # Atualiza velas a cada 60s (M5 não precisa de tanta frequência)
+                if agora.second in (0, 30):
                     await self.atualizar_velas()
 
                 horario_entrada = self.calcular_horario_entrada()
                 horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
                 tempo_ate_envio = (horario_envio - agora).total_seconds()
 
+                # Janela de envio: 0 a 15s antes do horário de envio
                 if 0 <= tempo_ate_envio <= 15:
                     sinal = self.buscar_sinal()
 
                     if sinal:
-                        # ⚠️ v4.3: INTERVALO GLOBAL
+                        # Intervalo GLOBAL
                         if time.time() - self.ult_sinal_global > INTERVALO_MINIMO:
                             if tempo_ate_envio > 0:
                                 await asyncio.sleep(tempo_ate_envio)
