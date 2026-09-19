@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 """
-⚛️ QUANTUM TRIPLE M5 v4.4 - MULTI-CONFLUÊNCIA (M5)
-🎯 5 Confluências: EMA9/EMA21, RSI Wilder, Força Candle, Rompimento, S/R
-💪 Mínimo 3/5 confirmações
+⚛️ QUANTUM TRIPLE M5 v5.0 - MULTI-CONFLUÊNCIA (MACD + Bollinger)
+🎯 7 Confluências: EMA9/EMA21, RSI, Candle, Rompimento, S/R, MACD, Bollinger
+💪 Mínimo 4/7 confirmações
 📊 6 Pares OTC + 6 Pares Mercado Aberto
 ⏱️ M5 (5 minutos)
 🔄 Gale 1.5x
 
-MUDANÇAS v4.4 (sobre v4.3):
-✅ TIMEFRAME = 300 (M5)
-✅ ANTECEDENCIA = 30s
-✅ INTERVALO_MINIMO GLOBAL = 900s (15 min)
-✅ ATR_MINIMO_RELATIVO = 0.0001
-✅ Alinhamento de candle M5 (00, 05, 10, 15, 20...)
-✅ Monitor de expiração em 5 min
-
-REGRAS DE HORÁRIO (forçadas UTC → BR):
-  • Seg-Sex 00:00–15:59 → Mercado Aberto
-  • Seg-Sex 16:00–23:59 → OTC
-  • Sáb/Dom           → OTC o dia todo
+MUDANÇAS v5.0 (sobre v4.5):
+✅ MACD (12, 26, 9) — histograma + linha
+✅ Bollinger Bands (20, 2) — posição do preço
+✅ MIN_CONFLUENCIAS = 4/7 (era 4/5)
 """
 import asyncio, time, requests, numpy as np, signal, sys, os
 from datetime import datetime, timedelta, timezone
@@ -26,38 +18,43 @@ from collections import deque
 
 signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
-# ═══════════════════════════════════════════
-# 🌎 FUSO HORÁRIO BLINDADO
-# ═══════════════════════════════════════════
 FUSO_BR = timezone(timedelta(hours=-3))
 
 
 def agora_br():
-    """Sempre retorna hora de Brasília, independente do TZ do servidor."""
     return datetime.now(timezone.utc).astimezone(FUSO_BR)
 
 
 # ═══════════════════════════════════════════
 # ⚙️ CONFIGURAÇÕES
 # ═══════════════════════════════════════════
-TIMEFRAME = 300                # ← M5 (5 minutos)
-INTERVALO_MINIMO = 900         # 15 min GLOBAL (qualquer par)
-ANTECEDENCIA = 30              # 30s antes do candle M5 fechar
+TIMEFRAME = 300
+INTERVALO_MINIMO = 1200
+ANTECEDENCIA = 30
 USAR_GALE = True
 MULTIPLICADOR_GALE = 1.5
-CONFIANCA_MINIMA = 70
+CONFIANCA_MINIMA = 75
 PAYOUT_MINIMO = 80
-ATR_MINIMO_RELATIVO = 0.0001   # ← M5: ATR maior
-MIN_CONFLUENCIAS = 3
+ATR_MINIMO_RELATIVO = 0.0001
+MIN_CONFLUENCIAS = 4           # mínimo 4/7
 PENALIDADE_SR = -15
-RSI_EXAUSTAO_ALTA = 68
-RSI_EXAUSTAO_BAIXA = 32
+RSI_EXAUSTAO_ALTA = 65
+RSI_EXAUSTAO_BAIXA = 35
 TOLERANCIA_SR_ATR = 0.8
 DEBUG_HORARIO = True
 
+# MACD
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+# Bollinger
+BB_PERIODO = 20
+BB_DESVIO = 2.0
+
 
 def banner():
-    print("⚛️ QUANTUM TRIPLE M5 v4.4 - Multi-Confluência")
+    print("⚛️ QUANTUM TRIPLE M5 v5.0 - Multi-Confluência (MACD + Bollinger)")
 
 
 def carregar_config():
@@ -83,9 +80,6 @@ SENHA = cfg['senha']
 
 from iqoptionapi.stable_api import IQ_Option
 
-# ═══════════════════════════════════════════
-# 📊 ATIVOS
-# ═══════════════════════════════════════════
 ATIVOS_OTC = {
     "EURUSD-OTC": "EURUSD-OTC",
     "GBPUSD-OTC": "GBPUSD-OTC",
@@ -176,6 +170,69 @@ def calcular_atr(velas, periodo=14):
 
 
 # ═══════════════════════════════════════════
+# 📈 MACD
+# ═══════════════════════════════════════════
+def calcular_macd(velas, fast=12, slow=26, signal_period=9):
+    """
+    Retorna (macd_line, signal_line, histograma) do último candle.
+    """
+    if len(velas) < slow + signal_period:
+        return None, None, None
+
+    fechamentos = [v["close"] for v in velas]
+
+    # EMA rápida
+    ema_fast = ema(fechamentos, fast)
+    # EMA lenta
+    ema_slow = ema(fechamentos, slow)
+
+    if ema_fast is None or ema_slow is None:
+        return None, None, None
+
+    macd_line = ema_fast - ema_slow
+
+    # Para a linha de sinal, precisamos do MACD de várias velas
+    macd_series = []
+    for i in range(slow, len(fechamentos)):
+        sub = fechamentos[:i + 1]
+        ef = ema(sub, fast)
+        es = ema(sub, slow)
+        if ef is not None and es is not None:
+            macd_series.append(ef - es)
+
+    if len(macd_series) < signal_period:
+        return macd_line, None, None
+
+    signal_line = ema(macd_series, signal_period)
+    if signal_line is None:
+        return macd_line, None, None
+
+    histograma = macd_line - signal_line
+
+    return macd_line, signal_line, histograma
+
+
+# ═══════════════════════════════════════════
+# 📉 BOLLINGER BANDS
+# ═══════════════════════════════════════════
+def calcular_bollinger(velas, periodo=20, desvio=2.0):
+    """
+    Retorna (banda_sup, banda_med, banda_inf) do último candle.
+    """
+    if len(velas) < periodo:
+        return None, None, None
+
+    fechamentos = np.array([v["close"] for v in velas[-periodo:]], dtype=float)
+    media = fechamentos.mean()
+    std = fechamentos.std()
+
+    banda_sup = media + desvio * std
+    banda_inf = media - desvio * std
+
+    return float(banda_sup), float(media), float(banda_inf)
+
+
+# ═══════════════════════════════════════════
 # 📍 SUPORTE / RESISTÊNCIA
 # ═══════════════════════════════════════════
 def encontrar_suporte_resistencia(velas, lookback=20):
@@ -205,14 +262,16 @@ def proximo_de_nivel(preco, suporte, resistencia, atr, tolerancia_atr=0.8):
 # ═══════════════════════════════════════════
 def quantum_triple(velas):
     """
-    5 confluências:
+    7 confluências:
       1) EMA9 vs EMA21
-      2) RSI Wilder (zona morta 45–55 + exaustão 68/32)
+      2) RSI Wilder (zona morta + exaustão)
       3) Força do candle
-      4) Rompimento da vela anterior
-      5) Suporte / Resistência (tolerância 0,8 ATR)
+      4) Rompimento
+      5) Suporte / Resistência
+      6) MACD (histograma + cruzamento)
+      7) Bollinger Bands (posição do preço)
     """
-    if len(velas) < 30:
+    if len(velas) < 35:
         return None
 
     fechamentos = [v["close"] for v in velas]
@@ -229,8 +288,10 @@ def quantum_triple(velas):
     if valor_atr < ATR_MINIMO_RELATIVO:
         return None
 
+    # Zona morta RSI
     if 45 <= valor_rsi <= 55:
         return None
+    # Exaustão
     if valor_rsi >= RSI_EXAUSTAO_ALTA:
         return None
     if valor_rsi <= RSI_EXAUSTAO_BAIXA:
@@ -239,32 +300,32 @@ def quantum_triple(velas):
     conf_call = 0
     conf_put = 0
 
-    # 1) Tendência EMA
+    # ── 1) EMA ──
     if ema_9 > ema_21:
         conf_call += 1
     elif ema_9 < ema_21:
         conf_put += 1
 
-    # 2) RSI
+    # ── 2) RSI ──
     if valor_rsi > 55:
         conf_call += 1
     elif valor_rsi < 45:
         conf_put += 1
 
-    # 3) Força do candle
+    # ── 3) Candle ──
     corpo = atual["close"] - atual["open"]
     if corpo > 0 and abs(corpo) >= valor_atr * 0.15:
         conf_call += 1
     elif corpo < 0 and abs(corpo) >= valor_atr * 0.15:
         conf_put += 1
 
-    # 4) Rompimento
+    # ── 4) Rompimento ──
     if atual["high"] > anterior["high"] and atual["close"] > atual["open"]:
         conf_call += 1
     elif atual["low"] < anterior["low"] and atual["close"] < atual["open"]:
         conf_put += 1
 
-    # 5) Suporte / Resistência
+    # ── 5) S/R ──
     suporte, resistencia = encontrar_suporte_resistencia(velas, lookback=20)
     zona = proximo_de_nivel(
         atual["close"], suporte, resistencia, valor_atr,
@@ -275,7 +336,39 @@ def quantum_triple(velas):
     elif zona == "resistencia":
         conf_put += 1
 
-    # Decisão
+    # ── 6) MACD (NOVO) ──
+    macd_line, signal_line, histograma = calcular_macd(velas)
+    macd_ok = macd_line is not None and signal_line is not None
+
+    if macd_ok:
+        # Histograma positivo + MACD acima da signal → CALL
+        if histograma > 0 and macd_line > signal_line:
+            conf_call += 1
+        # Histograma negativo + MACD abaixo da signal → PUT
+        elif histograma < 0 and macd_line < signal_line:
+            conf_put += 1
+
+    # ── 7) Bollinger Bands (NOVO) ──
+    bb_sup, bb_med, bb_inf = calcular_bollinger(velas)
+
+    # Preço na banda inferior → reversão pra cima (CALL)
+    # Preço na banda superior → reversão pra baixo (PUT)
+    bb_posicao = None
+    if bb_sup and bb_inf and bb_sup > bb_inf:
+        if atual["close"] <= bb_inf:
+            conf_call += 1  # toque na banda inferior
+            bb_posicao = "inferior"
+        elif atual["close"] >= bb_sup:
+            conf_put += 1  # toque na banda superior
+            bb_posicao = "superior"
+        elif atual["close"] > bb_med:
+            conf_call += 1  # acima da média
+            bb_posicao = "acima_media"
+        elif atual["close"] < bb_med:
+            conf_put += 1  # abaixo da média
+            bb_posicao = "abaixo_media"
+
+    # ── Decisão ──
     if conf_call > conf_put:
         direcao = "CALL"
         total = conf_call
@@ -288,13 +381,24 @@ def quantum_triple(velas):
     if total < MIN_CONFLUENCIAS:
         return None
 
-    # Confiança real
+    # ── Confiança real ──
     dist_ema = abs(ema_9 - ema_21) / valor_atr
     forca_tendencia = min(1.0, dist_ema / 1.5)
     forca_rsi = min(1.0, abs(valor_rsi - 50) / 30)
     bonus_sr = 1.0 if zona else 0.0
 
-    # Penalidade se S/R contraria
+    # MACD força
+    macd_forca = 0.0
+    if macd_ok and valor_atr > 0:
+        macd_forca = min(1.0, abs(histograma) / (valor_atr * 0.5))
+
+    # Bollinger posição
+    bb_bonus = 0.0
+    if bb_posicao in ("inferior", "superior"):
+        bb_bonus = 1.0  # toque nas bandas é forte
+    elif bb_posicao:
+        bb_bonus = 0.5
+
     penalidade_sr = 0
     if direcao == "CALL" and zona == "resistencia":
         penalidade_sr = PENALIDADE_SR
@@ -303,10 +407,12 @@ def quantum_triple(velas):
 
     confianca = int(
         40
-        + total * 7
-        + forca_tendencia * 8
-        + forca_rsi * 7
-        + bonus_sr * 5
+        + total * 6              # 7 confluências → até +42
+        + forca_tendencia * 6
+        + forca_rsi * 5
+        + bonus_sr * 4
+        + macd_forca * 4
+        + bb_bonus * 3
         + penalidade_sr
     )
     confianca = max(0, min(95, confianca))
@@ -317,9 +423,10 @@ def quantum_triple(velas):
         "confluences": total,
         "rsi": round(valor_rsi, 2),
         "zona": zona or "—",
+        "macd": "OK" if macd_ok else "—",
+        "bb": bb_posicao or "—",
         "suporte": round(suporte, 5) if suporte else None,
         "resistencia": round(resistencia, 5) if resistencia else None,
-        "penalidade_sr": penalidade_sr,
     }
 
 
@@ -341,7 +448,6 @@ class Bot:
         self._monitorando = set()
         self._ultimo_log_horario = 0
 
-    # ── Conexão ──
     def conectar_iq(self):
         try:
             if self.iq_api:
@@ -366,13 +472,7 @@ class Bot:
             return self.conectar_iq()
         return self.iq_api
 
-    # ── Filtros ──
     def horario_valido(self, ativo, debug=False):
-        """
-        Seg-Sex 00:00–15:59 → Mercado Aberto
-        Seg-Sex 16:00–23:59 → OTC
-        Sáb/Dom            → OTC o dia todo
-        """
         agora = agora_br()
         h = agora.hour
         dia_semana = agora.weekday()
@@ -388,10 +488,7 @@ class Bot:
 
         if debug:
             tipo = "OTC" if eh_otc else "ABERTO"
-            print(
-                f"   🔎 {ativo:14s} [{tipo:6s}] "
-                f"h={h:02d} | dia_sem={dia_semana} | ok={ok}"
-            )
+            print(f"   🔎 {ativo:14s} [{tipo:6s}] h={h:02d} | ok={ok}")
 
         return ok
 
@@ -410,7 +507,6 @@ class Bot:
             print(f"⚠️ payout_ok({ativo}): {e}")
             return True
 
-    # ── Velas ──
     async def atualizar_velas(self):
         api = await self.reconectar_se_necessario()
         if not api:
@@ -446,25 +542,19 @@ class Bot:
                 print(f"⚠️ velas {nome}: {type(e).__name__}: {e}")
                 continue
 
-    # ── Sinais ──
     def buscar_sinal(self):
         agora = agora_br()
         if time.time() - self._ultimo_log_horario > 60:
             self._ultimo_log_horario = time.time()
-            print(
-                f"\n🔍 [buscar_sinal] {agora.strftime('%d/%m %H:%M:%S')} "
-                f"| dia_semana={agora.weekday()}"
-            )
+            print(f"\n🔍 [buscar_sinal] {agora.strftime('%d/%m %H:%M:%S')}")
 
         melhor = None
         melhor_score = 0
 
         for par, velas in self.velas.items():
-            if len(velas) < 30:
+            if len(velas) < 35:
                 continue
-
-            h_ok = self.horario_valido(par, debug=DEBUG_HORARIO)
-            if not h_ok:
+            if not self.horario_valido(par, debug=DEBUG_HORARIO):
                 continue
             if not self.payout_ok(par):
                 continue
@@ -486,24 +576,18 @@ class Bot:
                     'confluencias': resultado['confluences'],
                     'rsi': resultado['rsi'],
                     'zona': resultado['zona'],
+                    'macd': resultado['macd'],
+                    'bb': resultado['bb'],
                     'suporte': resultado['suporte'],
                     'resistencia': resultado['resistencia'],
                 }
 
         return melhor
 
-    # ── Cálculo do horário de entrada M5 ──
     def calcular_horario_entrada(self):
-        """
-        Retorna o timestamp do PRÓXIMO candle M5 (múltiplo de 5 minutos).
-        Ex: agora 12:47:33 → entrada 12:50:00
-        """
         agora = agora_br()
-        minuto_atual = agora.minute
-        # Próximo múltiplo de 5
-        proximo = ((minuto_atual // 5) + 1) * 5
+        proximo = ((agora.minute // 5) + 1) * 5
         base = agora.replace(second=0, microsecond=0)
-
         if proximo >= 60:
             return base.replace(minute=0) + timedelta(hours=1)
         return base.replace(minute=proximo)
@@ -517,9 +601,18 @@ class Bot:
         else:
             emoji_zona = "—"
 
+        bb = sinal.get('bb', '—')
+        bb_emoji = {
+            "inferior": "🔻 Inferior",
+            "superior": "🔺 Superior",
+            "acima_media": "⬆️ Acima média",
+            "abaixo_media": "⬇️ Abaixo média",
+            "—": "—"
+        }.get(bb, "—")
+
         return f"""🚨SINAL AO VIVO🚨
 
-✳️ QUANTUM TRIPLE M5 v4.4 ✅
+✳️ QUANTUM TRIPLE M5 v5.0 ✅
 ⏲ EXPIRAÇÃO: M5
 
 👉🏼 HORARIO: {horario.strftime('%H:%M')}
@@ -527,30 +620,27 @@ class Bot:
 🏳ATIVO: {sinal['ativo']} {sinal['direcao']}
 
 📊 Confiança: {sinal['confianca']}%
-🎯 Confluências: {sinal['confluencias']}/5
+🎯 Confluências: {sinal['confluencias']}/7
 📈 RSI: {sinal['rsi']}
 📍 Zona: {emoji_zona}
+📉 Bollinger: {bb_emoji}
 
 🍀🍀BOA SORTE 🍀🍀"""
 
-    # ── Monitor (agora expira em 5 min) ──
     async def _esperar_fechamento(self, horario_entrada, minutos=5):
         expira = horario_entrada + timedelta(minutes=minutos)
         while agora_br() < expira + timedelta(seconds=8):
             await asyncio.sleep(1)
 
     def _buscar_vela_fechada(self, api, ativo, horario_entrada, minutos=5):
-        """Busca candle cujo fechamento == horario_entrada + `minutos`."""
         alvo_ts = (horario_entrada + timedelta(minutes=minutos)).timestamp()
         try:
-            # Pega candles recentes (5 velas M5 = 25 min de histórico)
             candles = api.get_candles(ativo, TIMEFRAME, 5, time.time())
         except Exception as e:
             print(f"⚠️ leitura vela {ativo}: {e}")
             return None
 
         for c in candles:
-            # c['from'] é o início do candle; fecha em 'from + 300'
             if abs((c['from'] + TIMEFRAME) - alvo_ts) < 30:
                 return c
         return None
@@ -561,7 +651,6 @@ class Bot:
         self._monitorando.add(ativo)
 
         try:
-            # Espera o candle M5 de entrada fechar (5 min)
             await self._esperar_fechamento(horario_entrada, minutos=5)
 
             api = await self.reconectar_se_necessario()
@@ -588,7 +677,6 @@ class Bot:
                 self.placar['w'] += 1
                 resultado = "✅ WIN"
             elif USAR_GALE:
-                # Gale: próximo candle M5 (5 min depois)
                 proxima = horario_entrada + timedelta(minutes=5)
                 await self._esperar_fechamento(proxima, minutos=5)
 
@@ -640,35 +728,32 @@ class Bot:
         if agora.day != self.ultimo_dia:
             self.ultimo_dia = agora.day
             self.placar = {'w': 0, 'g1': 0, 'l': 0, 'e': 0}
-            self.tg.send("🔄 *PLACAR ZERADO*")
-            print("🔄 Placar zerado.")
+            self.tg.send(f"🔄 *PLACAR ZERADO* ({agora.strftime('%d/%m/%Y')})")
+            print(f"🔄 Placar zerado em {agora.strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # ── Loop principal ──
     async def executar(self):
         banner()
-        print("⚛️ Bot QUANTUM TRIPLE M5 v4.4 iniciando...")
-        print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')} "
-              f"(dia_semana={agora_br().weekday()})")
+        print("⚛️ Bot QUANTUM TRIPLE M5 v5.0 iniciando...")
+        print(f"🕐 Hora BR agora: {agora_br().strftime('%d/%m/%Y %H:%M:%S')}")
 
-        self.tg.send(f"""🔥 *QUANTUM TRIPLE M5 v4.4 ATIVADO*
+        self.tg.send(f"""🔥 *QUANTUM TRIPLE M5 v5.0 ATIVADO*
 📊 {len(ATIVOS_OTC)} Pares OTC + {len(ATIVOS_MERCADO)} Pares Mercado Aberto
 ⏱️ *M5 (5 minutos)*
-🎯 5 Confluências:
-   • EMA9 vs EMA21
-   • RSI (Wilder 14 + zona morta + exaustão)
-   • Força do Candle
-   • Rompimento
-   • Suporte/Resistência
-⚠️ *RSI exaustão:* bloqueia >= {RSI_EXAUSTAO_ALTA} e <= {RSI_EXAUSTAO_BAIXA}
-⚠️ *Penalidade S/R:* {PENALIDADE_SR}% se contraria
-⚠️ *Tolerância S/R:* {TOLERANCIA_SR_ATR} ATR
-💪 Mínimo {MIN_CONFLUENCIAS}/5 confirmações
-💵 Payout mínimo: {PAYOUT_MINIMO}%
-⏱️ *INTERVALO GLOBAL:* {INTERVALO_MINIMO // 60} min (qualquer par)
-🕐 *Horários (BR):*
-   • Seg-Sex 00:00–15:59 → Mercado Aberto
-   • Seg-Sex 16:00–23:59 → OTC
-   • Sáb/Dom → OTC o dia todo
+🎯 *7 Confluências:*
+   1. EMA9 vs EMA21
+   2. RSI (Wilder + zona morta + exaustão)
+   3. Força do Candle
+   4. Rompimento
+   5. Suporte/Resistência
+   6. *MACD (12, 26, 9)*
+   7. *Bollinger Bands (20, 2)*
+⚠️ RSI exaustão: >= {RSI_EXAUSTAO_ALTA} ou <= {RSI_EXAUSTAO_BAIXA}
+⚠️ Penalidade S/R: {PENALIDADE_SR}%
+💪 Mínimo *{MIN_CONFLUENCIAS}/7* confirmações
+💵 Confiança mínima: *{CONFIANCA_MINIMA}%*
+⏱️ *INTERVALO GLOBAL:* {INTERVALO_MINIMO // 60} min
+🕐 Seg-Sex: 00-16h Aberto / 16-24h OTC
+🕐 Sáb/Dom: OTC o dia todo
 🔄 Gale 1.5x""")
 
         if not self.conectar_iq():
@@ -686,11 +771,7 @@ class Bot:
                 if agora.second == 0:
                     total_velas = sum(len(v) for v in self.velas.values())
                     print(f"💓 {agora.strftime('%H:%M:%S')} | Velas: {total_velas} | Sinais: {self.sinais}")
-                    if total_velas == 0:
-                        print("🔄 Sem velas! Reconectando...")
-                        self.iq_api = None
 
-                # Atualiza velas a cada 60s (M5 não precisa de tanta frequência)
                 if agora.second in (0, 30):
                     await self.atualizar_velas()
 
@@ -698,12 +779,10 @@ class Bot:
                 horario_envio = horario_entrada - timedelta(seconds=ANTECEDENCIA)
                 tempo_ate_envio = (horario_envio - agora).total_seconds()
 
-                # Janela de envio: 0 a 15s antes do horário de envio
                 if 0 <= tempo_ate_envio <= 15:
                     sinal = self.buscar_sinal()
 
                     if sinal:
-                        # Intervalo GLOBAL
                         if time.time() - self.ult_sinal_global > INTERVALO_MINIMO:
                             if tempo_ate_envio > 0:
                                 await asyncio.sleep(tempo_ate_envio)
@@ -714,7 +793,8 @@ class Bot:
                             print(
                                 f"✅ Sinal #{self.sinais}: {sinal['ativo']} | "
                                 f"{sinal['direcao']} | {sinal['confianca']}% | "
-                                f"{sinal['confluencias']}/5 | zona={sinal['zona']}"
+                                f"{sinal['confluencias']}/7 | "
+                                f"MACD={sinal['macd']} | BB={sinal['bb']}"
                             )
                             asyncio.create_task(
                                 self.monitorar_resultado(sinal, horario_entrada)
