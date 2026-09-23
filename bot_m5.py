@@ -101,7 +101,7 @@ def formatar_sinal(dados):
 ⚠️ Entrar somente no horário marcado.
 🔄 2 recuperação (Gale 2)!"""
 
-async def log_zeramento():
+async def log_novo_dia():
     while True:
         agora = datetime.now()
         meia_noite = agora.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -146,7 +146,7 @@ async def processar_mensagem(event):
     # ============================================================
     if tem_foto:
         if not bot_ativo:
-            print(f"[{horario()}] 💤 Bot ainda inativo — foto ignorada (aguardando 1º sinal)")
+            print(f"[{horario()}] 💤 Bot inativo — foto ignorada (aguardando 1º sinal)")
             print("=" * 40)
             return
 
@@ -180,7 +180,7 @@ async def main():
     print("💤 Bot INATIVO — aguardando primeiro sinal...")
     print("🚀 Após o 1º sinal, repassará todas as fotos de resultado")
     print("⏳ Aguardando...")
-    asyncio.create_task(log_zeramento())
+    asyncio.create_task(log_novo_dia())
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
