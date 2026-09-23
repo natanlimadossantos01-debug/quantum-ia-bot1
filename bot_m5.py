@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 ⚛️ ESPELHO TRADER MAGO - TELEGRAM
-📡 Copia sinais (texto) + repassa fotos de resultado
-✅ Sem contagem / sem placar / sem classificação
-✅ Zeramento à meia-noite (horário de Brasília) — só log
-❌ SEM OCR
+📡 Copia sinais + repassa fotos de resultado
+✅ Fica inativo até enviar o PRIMEIRO sinal
+✅ Depois disso, repassa todas as fotos de resultado
+❌ SEM OCR / SEM placar / SEM classificação
 """
 
 # ==============================
@@ -40,6 +40,11 @@ if not SESSAO_STRING:
     sys.exit(1)
 
 client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
+
+# ==============================
+# ESTADO
+# ==============================
+bot_ativo = False   # Vira True após enviar o primeiro sinal
 
 # ==============================
 # FUNÇÕES
@@ -103,35 +108,50 @@ async def log_zeramento():
         if agora >= meia_noite:
             meia_noite = meia_noite + timedelta(days=1)
         espera = (meia_noite - agora).total_seconds()
-        print(f"[{horario()}] ⏰ Próximo log de zeramento em {espera/3600:.2f}h (00:00 Brasília)")
+        print(f"[{horario()}] ⏰ Próximo log de novo dia em {espera/3600:.2f}h")
         await asyncio.sleep(espera)
         print(f"[{horario()}] 🔄 NOVO DIA (horário Brasília)")
 
 @client.on(events.NewMessage(chats=origem))
 async def processar_mensagem(event):
+    global bot_ativo
+
     texto = obter_texto(event)
     tem_foto = event.message.photo is not None
 
-    print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto})")
+    print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto}) | bot_ativo={bot_ativo}")
 
-    # ---- 1) É SINAL? ----
+    # ============================================================
+    # 1) É SINAL?
+    # ============================================================
     if texto and eh_sinal(texto):
         dados = extrair_dados_sinal(texto)
         msg = formatar_sinal(dados)
+
+        if not bot_ativo:
+            print(f"[{horario()}] 🚀 PRIMEIRO SINAL — ativando bot!")
+
         print(f"[{horario()}] 📊 SINAL | {dados['ativo']} | {dados['direcao']} | {dados['horario']}")
         try:
             await client.send_message(destino, msg)
-            print(f"[{horario()}] ✅ Sinal enviado!")
+            bot_ativo = True
+            print(f"[{horario()}] ✅ Enviado! Bot ATIVO a partir de agora.")
         except Exception as e:
             print(f"[{horario()}] ❌ Erro: {e}")
         print("=" * 40)
         return
 
-    # ---- 2) É FOTO? Repassa igual ----
+    # ============================================================
+    # 2) É FOTO? Só repassa se bot_ativo
+    # ============================================================
     if tem_foto:
+        if not bot_ativo:
+            print(f"[{horario()}] 💤 Bot ainda inativo — foto ignorada (aguardando 1º sinal)")
+            print("=" * 40)
+            return
+
         print(f"[{horario()}] 🖼️ Foto detectada — repassando...")
         try:
-            # Baixa a imagem e reenvia igual
             foto_bytes = await event.message.download_media(file=bytes)
             legenda = texto if texto else None
             await client.send_file(destino, foto_bytes, caption=legenda)
@@ -141,7 +161,9 @@ async def processar_mensagem(event):
         print("=" * 40)
         return
 
-    # ---- 3) Qualquer outro texto — ignora ----
+    # ============================================================
+    # 3) Qualquer outro texto — ignora
+    # ============================================================
     print(f"[{horario()}] 📝 Ignorada")
     print("=" * 40)
 
@@ -155,7 +177,8 @@ async def main():
     print("✅ Conectado")
     print(f"📡 Origem: {origem}")
     print(f"📡 Destino: {destino}")
-    print("📋 Modo: repassar foto de resultado sem classificar")
+    print("💤 Bot INATIVO — aguardando primeiro sinal...")
+    print("🚀 Após o 1º sinal, repassará todas as fotos de resultado")
     print("⏳ Aguardando...")
     asyncio.create_task(log_zeramento())
     await client.run_until_disconnected()
